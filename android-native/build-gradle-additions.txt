@@ -1,0 +1,18 @@
+Add to android/app/build.gradle, inside dependencies { ... }:
+
+    implementation "androidx.media:media:1.7.0"
+
+(androidx.core / NotificationCompat and support-compat come in
+transitively via Capacitor's own AndroidX deps, but if you hit a
+"symbol not found" on NotificationCompat, also add:)
+
+    implementation "androidx.core:core:1.13.1"
+
+After running `npx cap add android`, copy the three files from
+android-native/java/com/yourname/crate/ into:
+
+    android/app/src/main/java/com/yourname/crate/
+
+(Capacitor will have already created that package directory with
+MainActivity.java in it -- overwrite it with the version in this repo,
+and add PlaybackService.java and MediaBridgePlugin.java alongside it.)

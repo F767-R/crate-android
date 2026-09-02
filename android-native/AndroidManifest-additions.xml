@@ -1,0 +1,38 @@
+<!--
+  Merge these into android/app/src/main/AndroidManifest.xml after
+  running `npx cap add android`. Don't overwrite the whole file --
+  Capacitor generates the rest (MainActivity entry, etc).
+-->
+
+<!-- Permissions: add inside <manifest>, above <application> -->
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<!-- Only needed if you ever fall back to a non-Tailscale, non-HTTPS
+     LAN address for Jellyfin. Not needed for your MagicDNS+HTTPS setup. -->
+<!-- <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> -->
+
+<!-- Inside <application>, alongside the existing MainActivity entry -->
+<service
+    android:name=".PlaybackService"
+    android:exported="false"
+    android:foregroundServiceType="mediaPlayback" />
+
+<receiver
+    android:name="androidx.media.session.MediaButtonReceiver"
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.intent.action.MEDIA_BUTTON" />
+    </intent-filter>
+</receiver>
+
+<!--
+  Network security: since Jellyfin is reachable over Tailscale MagicDNS
+  with a valid HTTPS cert (*.ts.net via Let's Encrypt), you do NOT need
+  usesCleartextTraffic or a custom network-security-config. Standard
+  Android HTTPS trust (system CA store, which includes Let's Encrypt)
+  handles it. Only add a network-security-config if you later add a
+  self-signed cert or a non-Tailscale plain-HTTP fallback.
+-->

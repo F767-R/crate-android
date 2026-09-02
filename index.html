@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>C.R.A.T.E. — Custom Remote Audio & Translation Engine</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="app"></div>
+<script>
+window.addEventListener('error', function(e) {
+  var app = document.getElementById('app');
+  if (!app || app.querySelector('.status-msg.error')) return;
+  app.innerHTML = '<div class="app"><main id="main"><div class="status-msg error">⚠️ JS error:<br><code>' +
+    String(e.message || e) + '</code></div></main></div>';
+});
+</script>
+<script type="module" src="/src/main.jsx"></script>
+</body>
+</html>

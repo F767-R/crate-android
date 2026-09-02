@@ -1,0 +1,32 @@
+{
+  "name": "crate-android",
+  "version": "1.0.0",
+  "description": "Android shell for C.R.A.T.E. music player with native media session support",
+  "type": "module",
+  "scripts": {
+    "prepare:config": "node scripts/generate-config.mjs",
+    "check:secrets": "node scripts/check-tracked-secrets.mjs",
+    "predev": "npm run prepare:config",
+    "dev": "vite",
+    "prebuild": "npm run prepare:config",
+    "build": "vite build",
+    "pretest": "npm run prepare:config",
+    "test": "node tests/playback-smoke.mjs",
+    "preview": "vite preview",
+    "sync": "npm run build && npx cap sync android",
+    "open": "npx cap open android",
+    "build:android": "npm run sync && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "preact": "^10.22.0",
+    "htm": "^3.1.1",
+    "@preact/signals": "^1.2.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "@preact/preset-vite": "^2.9.0",
+    "vite": "^5.4.0"
+  }
+}

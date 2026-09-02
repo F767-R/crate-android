@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Default: HTTPS only, no cleartext -->
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- Allow cleartext to the local nginx host that fronts the DeepL
+         proxy. The Capacitor WebView loads the app from this host
+         (server.url in capacitor.config.json), and /translate resolves
+         here as well. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.1.2</domain>
+        <domain includeSubdomains="false">192.168.1.17</domain>
+    </domain-config>
+</network-security-config>

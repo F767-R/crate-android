@@ -1,0 +1,1252 @@
+  :root{--bg:#12161a;--panel:#1a2025;--panel-hi:#212830;--line:#2a323a;--text:#eae6dd;--muted:#8a939c;--gold:#c9a24b;--gold-dim:#7d6633;--teal:#4c8c86;--danger:#b8574f}
+  *{box-sizing:border-box}html,body{height:100%;margin:0;max-width:100%;overflow-x:hidden}
+  body{background:radial-gradient(1200px 800px at 15% -10%,#1a2229 0%,var(--bg) 55%);color:var(--text);font-family:'Inter',sans-serif;display:flex;flex-direction:column;overflow:hidden;height:100vh;height:100dvh;color-scheme:dark}
+  #app,.app{display:flex;flex-direction:column;flex:1;min-height:0;height:100%;width:100%}
+  ::selection{background:var(--gold-dim);color:var(--text)}
+  header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;row-gap:10px;padding:18px 20px 14px;border-bottom:1px solid var(--line);flex-shrink:0;gap:10px;position:relative;z-index:60}
+  .brand{display:flex;align-items:flex-start;gap:12px;min-width:0;flex:1 1 auto}
+  .brand h1{font-family:'Fraunces',serif;font-weight:600;font-size:24px;letter-spacing:.5px;margin:0;color:var(--text);white-space:nowrap;flex-shrink:0;line-height:1.2}
+  .brand .tagline{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);white-space:normal;overflow-wrap:break-word;flex:1 1 auto;min-width:0;line-height:1.4;padding-top:2px}
+  .header-right{display:flex;align-items:center;gap:10px;flex-shrink:0}#searchInput{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:9px 14px;border-radius:20px;font-family:'Inter',sans-serif;font-size:13px;width:220px;max-width:46vw;outline:none;transition:border-color .15s,width .15s}#searchInput:focus{border-color:var(--gold-dim);width:280px;max-width:60vw}#searchInput::placeholder{color:var(--muted)}.search-container{position:relative;display:flex;align-items:center;flex:1 1 auto;min-width:0}.search-container #searchInput{padding-right:34px;width:100%;max-width:none;transition:border-color .15s}.search-container #searchInput:focus{width:100%}.clear-search-btn{position:absolute;right:8px;background:none;border:none;color:var(--muted);cursor:pointer;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:color .15s,background .15s;pointer-events:auto}.clear-search-btn:hover{color:var(--gold);background:rgba(201,162,75,0.1)}.clear-search-btn.hidden{opacity:0;pointer-events:none}
+  .conn-status{position:relative;flex-shrink:0}
+  .conn-dot-btn{background:none;border:none;padding:8px;margin:-8px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .conn-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);display:block}.conn-dot.ok{background:var(--teal);box-shadow:0 0 6px var(--teal)}.conn-dot.err{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+  .conn-popup{display:none;position:absolute;top:calc(100% + 10px);left:50%;transform:translateX(-50%);background:var(--panel-hi);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:11px;color:var(--text);white-space:nowrap;box-shadow:0 8px 20px rgba(0,0,0,0.45);z-index:30}
+  .conn-popup.show{display:block}
+  #refreshBtn{background:none;border:1px solid var(--line);color:var(--muted);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:color .15s,border-color .15s}
+  #queueBtn{background:none;border:1px solid var(--line);color:var(--muted);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:color .15s,border-color .15s;-webkit-appearance:none;appearance:none;touch-action:manipulation;font:inherit}
+  #refreshBtn.spinning svg{animation:refresh-spin .7s linear infinite}
+  @keyframes refresh-spin{to{transform:rotate(360deg)}}
+  main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:26px 32px 140px}
+  .now-playing-strip{display:none !important}  /* removed: now-playing banner — mini player covers it */
+  .now-playing-strip .np-strip-note{color:var(--gold);font-size:13px;flex-shrink:0;line-height:1}
+  .now-playing-strip .np-strip-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .now-playing-strip .np-strip-text .artist{color:var(--muted)}
+  .status-msg{max-width:560px;margin:60px auto;text-align:center;color:var(--muted);font-size:14px;line-height:1.6}.status-msg.error{color:var(--danger)}.status-msg code{background:var(--panel);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--gold)}
+  .crumb{display:flex;align-items:center;gap:8px;margin-bottom:20px;font-size:12px;letter-spacing:.4px;color:var(--muted)}.crumb button{background:none;border:none;color:var(--gold);cursor:pointer;font-family:'Inter',sans-serif;font-size:12px;padding:0;letter-spacing:.4px}
+  .album-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:22px}.album-card{cursor:pointer;display:flex;flex-direction:column;gap:8px;touch-action:manipulation}.art-wrap{position:relative;aspect-ratio:1/1;border-radius:6px;overflow:hidden;background:var(--panel);border:1px solid var(--line);transition:transform .18s ease,box-shadow .18s ease}.art-wrap img{width:100%;height:100%;object-fit:cover;display:block}.art-fallback{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:'Fraunces',serif;font-size:30px}.album-title{font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.album-artist{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .track-header{display:flex;gap:24px;align-items:flex-end;margin-bottom:26px}.track-header img{width:150px;height:150px;object-fit:cover;border-radius:6px;border:1px solid var(--line);flex-shrink:0}.track-header .art-fallback{width:150px;height:150px;border-radius:6px;border:1px solid var(--line);background:var(--panel);flex-shrink:0}.track-header>div{min-width:0}.track-header h2{font-family:'Fraunces',serif;font-weight:600;font-size:28px;margin:0 0 6px;overflow-wrap:break-word}.track-header .meta{color:var(--muted);font-size:13px}
+  .track-row {display: grid;grid-template-columns: 32px 1fr 60px;align-items: center;gap: 14px;padding: 10px 12px;border-radius: 6px;cursor: pointer;font-size: 13.5px;}.track-index {display: flex;align-items: center;justify-content: center;gap: 0;font-family: 'JetBrains Mono', monospace;font-size: 12px;color: var(--muted);text-align: center;}.track-index .playing-icon {display: none;color: var(--gold);font-size: 13px;}.track-row.playing .track-index .idx {display: none;}.track-row.playing .track-index .playing-icon {display: block;}.track-row .name {color: var(--text);white-space: nowrap;overflow: hidden;text-overflow: ellipsis;}.track-row .name .sub {color: var(--muted);font-size: 11.5px;margin-left: 8px;}.track-row .dur {color: var(--muted);font-family: 'JetBrains Mono', monospace;font-size: 11.5px;text-align: center;justify-self: center;}.track-row.playing{background:var(--panel-hi);}
+  .disc-header{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--gold-dim);padding:18px 12px 8px;border-top:1px solid var(--line);margin-top:6px}.disc-header:first-child{border-top:none;margin-top:0;padding-top:2px}
+  .player-bar{position:fixed;left:0;right:0;bottom:0;min-height:96px;background:linear-gradient(180deg,#171c21 0%,#12161a 100%);border-top:1px solid var(--line);display:flex;align-items:center;padding:0 26px;padding-bottom:env(safe-area-inset-bottom);gap:22px;z-index:10;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;transition:transform .25s ease}
+  .player-bar.collapsed{transform:translateY(100%)}
+  /* Collapse trigger — lives in the right column of the secondary row's
+     3-col grid; justify-self:end pins it to the far right. */
+  #collapsePlayerBtn{grid-column:3;justify-self:end;margin-left:14px;min-width:40px;min-height:40px;padding:8px;background:var(--panel-hi);border:1px solid var(--line);color:var(--muted);cursor:pointer;border-radius:50%;display:flex;align-items:center;justify-content:center;touch-action:manipulation}
+  #collapsePlayerBtn:hover{color:var(--text);background:var(--panel);border-color:var(--gold-dim)}
+  /* When the bar is collapsed, reclaim the screen real estate. */
+  body.player-collapsed main{padding-bottom:80px !important}
+  /* Floating mini-player — fixed, slides in from the bottom. */
+  .mini-player{position:fixed;left:8px;right:8px;bottom:8px;min-height:60px;background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;align-items:center;padding:8px 10px calc(8px + env(safe-area-inset-bottom)) 10px;gap:8px;z-index:11;box-shadow:0 8px 24px rgba(0,0,0,.5);user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;transform:translateY(calc(100% + 16px));transition:transform .25s ease;cursor:pointer}
+  .mini-player.visible{transform:translateY(0)}
+  .mini-art{width:40px;height:40px;border-radius:5px;overflow:hidden;flex-shrink:0;background:var(--bg);border:1px solid var(--line)}
+  .mini-art img{width:100%;height:100%;object-fit:cover;display:block}
+  .mini-info{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;pointer-events:none;min-height:40px}
+  .mini-title{font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+  .mini-artist{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+  .mini-btn{background:none;border:none;color:var(--text);cursor:pointer;padding:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;min-width:40px;min-height:40px;touch-action:manipulation}
+  .mini-btn:hover{background:var(--panel-hi)}
+  .mini-btn.mini-play{background:var(--gold);color:#161616}
+  .mini-btn.mini-play:hover{background:#dcb35c}
+  .art-thumb{width:68px;height:68px;border-radius:6px;overflow:hidden;flex-shrink:0;background:var(--panel);border:1px solid var(--line)}.art-thumb img{width:100%;height:100%;object-fit:cover;display:block}.art-thumb.buffering{animation:art-pulse 1s ease-in-out infinite}
+  @keyframes art-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .now-playing{min-width:180px;max-width:320px;cursor:pointer}.now-playing .t{font-size:13.5px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.now-playing .a{font-size:11.5px;color:var(--muted);white-space:normal;overflow-wrap:break-word;line-height:1.4}
+  .transport{display:flex;align-items:center;gap:6px;flex-shrink:0}.transport button{background:none;border:none;color:var(--text);cursor:pointer;padding:6px;display:flex;align-items:center;justify-content:center;opacity:.85;touch-action:manipulation}.transport button.play-btn{width:36px;height:36px;border-radius:50%;background:var(--gold);color:#161616;opacity:1}.transport button:disabled{opacity:.3;cursor:default}
+  /* Keyboard focus ring for transport/mini/header buttons. :focus-visible
+     only fires for keyboard / D-pad navigation — touch and mouse clicks
+     don't trigger it, so tap users see no extra chrome. Matches the gold
+     accent used elsewhere. 2px outline + 2px offset keeps the ring
+     visible on the dark background without overlapping the icon. */
+  button:focus-visible{outline:2px solid var(--gold);outline-offset:2px;border-radius:50%}
+  .transport button.play-btn:focus-visible{border-radius:50%}
+  /* Wrapper divs that exist only to group transport buttons on mobile.
+     On desktop we want them to be transparent to layout so the buttons
+     still flow as a single row inside .transport. */
+  .transport-row{display:contents}
+  #translateBtn.active { color: var(--gold); }
+  #translateServerBtn { opacity: 0.45; }
+  #translateServerBtn:hover, #translateServerBtn:active { opacity: 0.85; }
+  #shuffleBtn.active{color:var(--gold)}
+  #repeatBtn.active{color:var(--gold)}
+  #repeatOneBadge{display:none;position:absolute;top:0;right:0;font-size:8px;font-family:'JetBrains Mono',monospace;background:var(--gold);color:#161616;border-radius:50%;width:11px;height:11px;line-height:11px;text-align:center;font-weight:600}
+  #repeatBtn.repeat-one #repeatOneBadge{display:block}
+  #qualityBtn.active{color:var(--gold)}
+  #sleepBtn.active{color:var(--gold)}
+
+  /* Sleep timer badge shown on the sleep button when a timer is active */
+  .sleep-badge {
+    display: none;
+    font-family: 'Inter', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    background: var(--gold);
+    color: #161616;
+    border-radius: 7px;
+    padding: 1px 5px 2px;
+    margin-left: 4px;
+    line-height: 1.2;
+    letter-spacing: 0.2px;
+    vertical-align: middle;
+  }
+  .sleep-badge.visible { display: inline-block; }
+  .scrub-area{flex:1;display:flex;align-items:center;gap:10px;min-width:120px}.time{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);width:38px;flex-shrink:0}.time.right{text-align:right}.time.stream-info{width:auto;min-width:48px;text-align:center;font-size:9px;letter-spacing:.5px;color:var(--gold-dim);background:var(--panel);padding:2px 6px;border-radius:10px;border:1px solid var(--line);line-height:1;flex-shrink:0}
+  .scrub{flex:1;height:4px;background:var(--line);border-radius:2px;position:relative;cursor:pointer;touch-action:none}.scrub::before{content:"";position:absolute;left:0;right:0;top:-12px;bottom:-12px}
+  .scrub .fill{position:absolute;left:0;top:0;height:100%;background:#c9a24b !important;border-radius:2px;width:0%;pointer-events:none}
+  .scrub .knob{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;background:#c9a24b !important;transform:translate(-50%,-50%);left:0%;box-shadow:0 0 0 3px rgba(201,162,75,0.15);opacity:0;transition:opacity .15s;pointer-events:none}
+  .scrub.dragging .knob{opacity:1}
+  .vol-area{display:flex;align-items:center;gap:8px;flex-shrink:0;width:110px}.vol-area svg{flex-shrink:0;opacity:.7}.vol-scrub{flex:1;height:4px;background:var(--line);border-radius:2px;position:relative;cursor:pointer;touch-action:none}.vol-scrub::before{content:"";position:absolute;left:0;right:0;top:-12px;bottom:-12px}.vol-scrub .fill{position:absolute;left:0;top:0;height:100%;background:var(--teal);border-radius:2px;width:70%;pointer-events:none}
+
+  /* Hover styles gated to devices with a real pointer that can hover (mouse/trackpad).
+     Touch has no hover state to leave - browsers fake one on tap and it sticks until the
+     next tap elsewhere, which reads as a stray highlight on whatever you just touched. */
+  @media (hover: hover) and (pointer: fine) {
+    #refreshBtn:hover{color:var(--gold);border-color:var(--gold-dim)}
+    .crumb button:hover{text-decoration:underline}
+    .album-card:hover .art-wrap{transform:translateY(-3px);box-shadow:0 10px 24px rgba(0,0,0,0.4);border-color:var(--gold-dim)}
+    .track-row:hover{background:var(--panel)}
+    .transport button:hover{opacity:1;color:var(--gold)}
+    .transport button.play-btn:hover{background:#dcb35c}
+    .scrub:hover .knob{opacity:1}
+    #lyricsPopup .popup-header button:hover{color:var(--text)}
+    .now-playing-strip:hover{background:var(--panel-hi)}
+    #queueBtn:hover{color:var(--gold);border-color:var(--gold-dim)}
+  }
+
+  .skeleton{background:linear-gradient(90deg,var(--panel) 25%,var(--panel-hi) 50%,var(--panel) 75%);background-size:200% 100%;animation:skeleton-shimmer 1.4s ease-in-out infinite}
+  @keyframes skeleton-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  .skeleton-album{display:flex;flex-direction:column;gap:8px}
+  .skeleton-art{aspect-ratio:1/1;border-radius:6px;border:1px solid var(--line)}
+  .skeleton-line{height:11px;border-radius:4px}
+  .skeleton-line.title{width:78%;height:12px}
+  .skeleton-line.artist{width:52%;height:10px}
+  .skeleton-track-row{display:grid;grid-template-columns:32px 1fr 60px;align-items:center;gap:14px;padding:10px 12px}
+  .skeleton-track-row .skeleton-idx{width:14px;height:11px}
+  .skeleton-track-row .skeleton-name{width:min(60%,320px);height:13px}
+  .skeleton-track-row .skeleton-dur{width:28px;height:10px;justify-self:end}
+  .skeleton-track-header{display:flex;gap:24px;align-items:flex-end;margin-bottom:26px}
+  .skeleton-track-header .skeleton-art{width:150px;height:150px;flex-shrink:0}
+  .skeleton-track-header .skeleton-head-lines{display:flex;flex-direction:column;gap:10px;flex:1}
+  .skeleton-track-header .skeleton-line.big{width:60%;height:22px}
+  .skeleton-track-header .skeleton-line.small{width:40%;height:12px}
+  @media(max-width:640px){
+    .skeleton-track-header{flex-direction:column;align-items:flex-start;gap:14px}
+    .skeleton-track-header .skeleton-art{width:120px;height:120px}
+  }
+
+  #lyricsPopup{display:none;position:fixed;bottom:110px;right:30px;width:380px;max-height:60vh;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.7);z-index:999;overflow:hidden;min-width:280px;min-height:120px;cursor:move}
+  #lyricsPopup.open{display:block}
+  #lyricsPopup .popup-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--panel-hi);border-bottom:1px solid var(--line);cursor:move;user-select:none}
+  #lyricsPopup .popup-header h4{margin:0;font-weight:500;font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;padding-right:10px}
+  #lyricsPopup .popup-header button{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:0 4px;line-height:1}
+  #lyricsPopup .popup-body{padding:16px 20px 20px;overflow-y:auto;max-height:calc(60vh - 52px);font-family:'Inter',sans-serif;font-size:14px;line-height:1.8;color:var(--text);text-align:center;user-select:none;-webkit-user-select:none}
+  /* Lyrics groups: each <div class="lyrics-group"> holds one or more
+     <span class="lyrics-line"> siblings that share a timestamp. The
+     group is the unit of centering, hover, active-highlight, and
+     click-to-seek, so a chorus split across two lines renders as one
+     centered block instead of two offset rows.
+
+     Selectors are intentionally unscoped from #lyricsPopup / .lyrics-view
+     so the same styles work for both the desktop popup and the mobile
+     in-page view (which live in mainEl, not inside the popup). */
+  .lyrics-group{padding:2px 6px;border-radius:5px;transition:color .15s,background .15s,transform .15s}
+  .lyrics-group.timed{cursor:pointer}
+  .lyrics-group.timed:hover{color:var(--gold);background:rgba(201,162,75,0.08)}
+  /* Active state: same padding/box as the resting state so toggling
+     classes doesn't shift layout. Previous version bumped padding from
+     2px 6px → 2px 8px and applied transform:scale(1.04); both caused
+     visible jitter on the lyric scroll when a group contained multiple
+     lines (e.g. a 2-line chorus sharing a timestamp) — the padding
+     change reflowed neighbors, and the scale offset the visual center
+     from the layout center that scrollIntoView({block:'center'}) was
+     targeting, so the scroll landed the line slightly off and the next
+     state change re-scrolled. Color/weight/box-shadow carry the active
+     state without touching layout. */
+  .lyrics-group.active{color:#161616;background:#c9a24b;font-weight:600;box-shadow:0 0 14px rgba(201,162,75,0.55)}
+  .lyrics-group.active.timed:hover{background:#c9a24b;color:#fff}
+  /* Each line is its own block within the group so a chorus split
+     across two lines stacks vertically (one line per row) instead of
+     collapsing onto a single visual line. The group itself stays
+     block, so the active gold highlight still wraps the whole group
+     as one unit. */
+  .lyrics-line{display:block}
+  .lyrics-group .lyrics-line + .lyrics-line{margin-top:2px}
+  #lyricsPopup .popup-body::-webkit-scrollbar{width:6px}#lyricsPopup .popup-body::-webkit-scrollbar-track{background:transparent}
+  #lyricsPopup .popup-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  #lyricsPopup .popup-body::-webkit-scrollbar-thumb:hover{background:var(--gold-dim)}
+
+  @media (max-width: 640px) {
+  /* ---- Header & Main Layout ---- */
+  header { 
+    padding: 16px 18px 14px; 
+  }
+  .brand { 
+    flex: 1 1 100%; 
+    width: 100%; 
+  }
+  .header-right { 
+    flex: 1 1 100%; 
+    width: 100%; 
+  }
+  .search-container { 
+    flex: 1; 
+    max-width: none; 
+  }
+  #searchInput { 
+    flex: 1 1 auto;
+    width: auto; 
+    max-width: none; 
+  }
+  #searchInput:focus { 
+    width: auto; 
+    max-width: none; 
+  }
+  main { 
+    padding: 18px 16px 120px; /* Reduced excess bottom padding */
+  }
+  .album-grid { 
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); 
+    gap: 14px; 
+  }
+  .crumb { 
+    flex-wrap: wrap; 
+  }
+
+  /* ---- Player Bar: Multi-row Flex Layout ---- */
+  .player-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 10px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    min-height: auto;
+  }
+
+  /* ---- Row 1: Scrub Area (Full Width) ---- */
+  .scrub-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 100%;
+    order: 1;
+    min-width: 0;
+  }
+  .scrub-area .time {
+    font-size: 10px;
+    width: auto;
+    flex: 0 0 auto;
+  }
+  .scrub-area .time.right { 
+    text-align: right; 
+  }
+  .scrub {
+    flex: 1 1 auto;
+    height: 5px;
+  }
+
+  /* ---- Row 2: Album Art + Now Playing (Left Half) ---- */
+  .art-thumb {
+    order: 2;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .now-playing {
+    order: 3;
+    display: block !important;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+  }
+  .now-playing .t {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .now-playing .a {
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+  }
+
+  /* ---- Row 2 (Right Side): Transport Controls ----
+     Two-row mobile layout: primary playback (shuffle, prev, play, next,
+     repeat) gets a prominent row with 48px touch targets and a 56px play
+     button; utility actions (quality, lyrics, translate) sit below in a
+     dimmed row. Desktop is unaffected — the wrapper divs just act as
+     flex items there. */
+  .transport {
+    order: 6;
+    flex: 0 0 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 0 8px;
+  }
+
+  .transport-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .transport-row.primary {
+    gap: 14px;
+  }
+
+  .transport-row.secondary {
+    /* 3-column grid: empty | group (auto) | chevron. The group sits in
+       the middle column so it's visually centered; the chevron lives
+       in the right column and is justified to the end. The right column
+       keeps a 48px floor so narrow screens can't squeeze the chevron
+       against the sleep button at the end of the group. */
+    display: grid;
+    grid-template-columns: minmax(8px, 1fr) auto minmax(48px, 1fr);
+    align-items: center;
+    opacity: 0.62;
+  }
+
+  .secondary-group {
+    grid-column: 2;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+
+  .transport-row.primary button {
+    padding: 12px;
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .transport-row.primary button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .transport-row.secondary button {
+    padding: 8px 12px;
+    min-height: 36px;
+  }
+
+  .transport-row.secondary button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .transport-row .play-btn {
+    width: 56px;
+    height: 56px;
+    margin: 0;
+  }
+
+  .transport-row .play-btn svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  #qualityBtn {
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+
+  /* Codec/Stream info row (mobile only) — full-width row below the progress bar */
+  .stream-row {
+    order: 5;
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    margin-left: auto;
+  }
+#streamInfo {
+  order: initial;
+  flex: none;
+  display: inline-block !important;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  color: var(--gold);
+  background: var(--panel);
+  border: 1px solid var(--gold-dim);
+  border-radius: 12px;
+  padding: 2px 10px;
+  line-height: 1.6;
+  text-transform: none;
+  white-space: nowrap;
+}
+  /* (transport button refinements are now in the .transport-row rules above) */
+
+  /* Ensure controls stay active */
+  #shuffleBtn, #repeatBtn, #qualityBtn, #translateBtn, #translateServerBtn, #lyricsBtn, #sleepBtn {
+    display: flex !important;
+  }
+
+  /* Hide desktop-only elements */
+  .vol-area { 
+    display: none !important; 
+  }
+
+  /* On mobile the lyrics popup is replaced by a regular view in the
+     main content area (same pattern as album detail / search). The
+     popup is desktop-only. */
+  #lyricsPopup { display: none !important; }
+  /* Lyrics view — rendered into mainEl on mobile. Matches the album
+     detail layout: a back crumb at the top, title/artist, then a
+     centered, scrollable lyrics body. */
+  .lyrics-view {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 0 120px;
+  }
+  .lyrics-view-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .lyrics-view-header h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 22px;
+    margin: 0 0 4px;
+    color: var(--text);
+    overflow-wrap: break-word;
+  }
+  .lyrics-view-header .lyrics-view-artist {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .lyrics-view-body {
+    text-align: center;
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    line-height: 1.9;
+    color: var(--text);
+    padding: 8px 12px 32px;
+  }
+  /* Only style lines that are direct children (the "no lyrics" message,
+     error text, etc.) — lines inside .lyrics-group must inherit the
+     group's color so hover/active state shows correctly. */
+  .lyrics-view-body > .lyrics-line {
+    color: var(--muted);
+  }
+
+  /* ====== QUEUE PANEL ====== */
+  .queue-panel {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .queue-panel.open {
+    display: flex;
+  }
+  .queue-panel .queue-container {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 520px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  }
+  .queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .queue-header h4 {
+    margin: 0;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 18px;
+    color: var(--text);
+  }
+  .queue-header button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 6px;
+  }
+  .queue-header button:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+  }
+  .queue-body {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 0;
+  }
+  .queue-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .queue-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--line);
+  }
+  .queue-item:hover {
+    background: var(--panel);
+  }
+  .queue-item.playing {
+    background: var(--panel-hi);
+  }
+  /* Drag-to-reorder: only the grip handle starts a drag (touch-action
+     none), so list scrolling and tap-to-play are unaffected. */
+  .queue-item .q-drag {
+    cursor: grab;
+    touch-action: none;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1;
+    padding: 10px 4px;
+    margin-left: -6px;
+    user-select: none;
+    -webkit-user-select: none;
+    flex-shrink: 0;
+    letter-spacing: -2px;
+  }
+  .queue-item .q-drag:active {
+    cursor: grabbing;
+  }
+  .queue-item.dragging {
+    position: relative;
+    z-index: 5;
+    background: var(--panel-hi);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+    opacity: 0.92;
+  }
+  .queue-item .q-idx {
+    width: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .queue-item .q-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .queue-item .q-name {
+    color: var(--text);
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .queue-item .q-artist {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .queue-item .q-remove {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 6px 8px;
+    font-size: 16px;
+    line-height: 1;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .queue-item .q-remove:hover {
+    color: var(--danger);
+    background: var(--panel-hi);
+  }
+
+  /* ====== CONTEXT MENU ====== */
+  .context-menu {
+    display: none;
+    position: fixed;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 6px 0;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 100;
+  }
+  .context-menu.open {
+    display: block;
+  }
+  .context-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    padding: 10px 16px;
+    white-space: nowrap;
+  }
+  .context-menu button:hover {
+    background: var(--panel-hi);
+    color: var(--gold);
+  }
+
+  @media (max-width: 640px) {
+    .queue-panel {
+      top: auto;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 0;
+      align-items: flex-end;
+      background: rgba(0,0,0,0.4);
+    }
+    .queue-panel .queue-container {
+      max-width: none;
+      max-height: 70vh;
+      border-radius: 16px 16px 0 0;
+      border-bottom: none;
+    }
+    .queue-header {
+      padding: 14px 18px;
+    }
+    .queue-item {
+      padding: 12px 18px;
+    }
+  }
+
+  /* ====== SLEEP TIMER PANEL ====== */
+  .sleep-panel {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+    align-items: flex-end;
+    justify-content: center;
+    padding: env(safe-area-inset-bottom);
+  }
+  .sleep-panel.open {
+    display: flex;
+  }
+  .sleep-panel .sleep-container {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 -8px 24px rgba(0,0,0,0.4);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .sleep-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .sleep-panel-header h4 {
+    margin: 0;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 18px;
+    color: var(--text);
+  }
+  .sleep-panel-header button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    padding: 8px;
+    border-radius: 6px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .sleep-panel-header button:hover {
+    color: var(--text);
+    background: var(--panel-hi);
+  }
+  .sleep-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 20px;
+  }
+  .sleep-options-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+  }
+  .sleep-options-group .sleep-option {
+    flex: 1 1 0;
+    min-width: 72px;
+  }
+  .sleep-divider {
+    height: 1px;
+    background: var(--line);
+    margin: 8px 0;
+  }
+  .sleep-option-section-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    padding: 0 4px;
+    margin-bottom: 6px;
+  }
+  .sleep-option {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 12px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    min-width: 72px;
+    min-height: 44px;
+    transition: background .15s, border-color .15s, color .15s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .sleep-option:hover {
+    background: var(--panel-hi);
+    border-color: var(--gold-dim);
+    color: var(--gold);
+  }
+  .sleep-option.active {
+    background: var(--gold-dim);
+    border-color: var(--gold);
+    color: var(--text);
+    box-shadow: 0 0 8px rgba(201,162,75,0.3);
+  }
+  .sleep-option:active {
+    transform: scale(0.97);
+    transition: transform .05s ease;
+  }
+
+  /* ====== SLEEP TIMER TOAST ====== */
+  .sleep-toast {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-120%);
+    background: var(--panel-hi);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    color: var(--text);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 200;
+    pointer-events: none;
+    opacity: 0;
+    transition: transform .3s ease, opacity .3s ease;
+    white-space: nowrap;
+  }
+  .sleep-toast.visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+
+  /* ====== TRANSLATION EDITOR PANEL ====== */
+  .tedit-panel {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .tedit-panel.open { display: flex; }
+  .tedit-panel .tedit-container {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 520px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  }
+  .tedit-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .tedit-header h4 {
+    margin: 0;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 18px;
+    color: var(--text);
+  }
+  .tedit-header button {
+    background: none; border: none; color: var(--muted);
+    cursor: pointer; font-size: 18px; padding: 4px 8px;
+    border-radius: 4px; line-height: 1;
+  }
+  .tedit-header button:hover { color: var(--text); background: var(--panel-hi); }
+  .tedit-body {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px 20px 20px;
+  }
+  .tedit-field { margin-bottom: 18px; }
+  .tedit-field:last-child { margin-bottom: 0; }
+  .tedit-label {
+    font-size: 11px;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--gold-dim);
+    margin-bottom: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .tedit-original {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--muted);
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    word-break: break-word;
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  .tedit-input {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color .15s;
+    box-sizing: border-box;
+  }
+  .tedit-input:focus { border-color: var(--gold); }
+  .tedit-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .tedit-footer button {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+  }
+  .tedit-footer button:hover { border-color: var(--gold-dim); }
+  .tedit-footer .tedit-save {
+    background: var(--gold);
+    color: #161616;
+    border-color: var(--gold);
+    font-weight: 500;
+  }
+  .tedit-footer .tedit-save:hover { background: #dcb35c; }
+  .tedit-footer .tedit-save:disabled { opacity: 0.6; cursor: default; }
+  .tedit-empty {
+    color: var(--muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 24px 0;
+  }
+  .tedit-toast {
+    position: fixed;
+    bottom: 110px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--gold);
+    color: #161616;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity .2s, transform .2s;
+    z-index: 200;
+    pointer-events: none;
+  }
+  .tedit-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .tedit-toast.error { background: var(--danger); color: #fff; }
+  #editTranslateBtn.active { color: var(--gold); }
+
+  @media (max-width: 640px) {
+    .tedit-panel { padding: 0; align-items: flex-end; }
+    .tedit-panel .tedit-container {
+      max-width: none;
+      max-height: 85vh;
+      border-radius: 16px 16px 0 0;
+      border-bottom: none;
+    }
+  }
+
+  .skeleton-track-header,
+  .track-header { 
+    flex-direction: column; 
+    align-items: stretch; 
+    gap: 14px; 
+  }
+  .skeleton-track-header .skeleton-art,
+  .track-header img, 
+  .track-header .art-fallback { 
+    width: 100%; 
+    height: auto; 
+    aspect-ratio: 1/1; 
+    object-fit: cover; 
+  }
+  .track-header h2 { 
+    font-size: 22px; 
+  }
+
+  .track-row {
+    grid-template-columns: 24px 1fr 45px;
+    align-items: start;
+    padding: 8px 6px;
+  }
+  .track-row .track-index {
+    align-self: center;
+  }
+  .track-row .dur {
+    align-self: center;
+  }
+  .track-row .name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.35;
+  }
+  .track-row .name .sub {
+    display: block;
+    margin-left: 0;
+    margin-top: 2px;
+    overflow-wrap: break-word;
+  }
+}
+
+  @media(max-width:420px){
+    header{padding:14px 14px 12px}
+    .brand .tagline{font-size:9.5px;letter-spacing:1px}
+    /* Shrink the gaps and play button just enough to keep all primary
+       buttons ≥44px hit area on the narrowest common phones (~360px).
+       The secondary gap now lives on .secondary-group, not the row,
+       because the row is a 3-col grid and a row-level gap would push
+       the columns apart. */
+    .transport-row.primary{gap:8px}
+    .secondary-group{gap:12px}
+    .transport-row.primary button{padding:10px;min-width:44px;min-height:44px}
+    .transport-row.secondary button{padding:6px 10px}
+    .transport-row .play-btn{width:52px;height:52px}
+  }
+
+  @media(pointer:coarse){
+    .scrub,.vol-scrub{height:6px}
+    .album-card,.track-row{-webkit-tap-highlight-color:rgba(201,162,75,0.15)}
+  }
+
+  /* Narrow desktop window: browsers resized to 521-640px. The main
+     640px breakpoint wraps the transport to two rows, which looks
+     broken on a desktop. This override restores the single-row
+     layout and tightens button sizes so the transport fits in the
+     available space. The full mobile layout (player-bar multi-row,
+     two-row transport, etc.) still kicks in at ≤520px for actual
+     phones. */
+  @media (min-width: 521px) and (max-width: 640px) {
+    .transport {
+      flex: 0 0 auto;
+      flex-direction: row;
+      gap: 4px;
+      max-width: none;
+      padding: 0;
+    }
+    .transport-row,
+    .transport-row.primary,
+    .transport-row.secondary {
+      display: contents;
+    }
+    .secondary-group {
+      display: contents;
+    }
+    /* Rows are flattened into one flex line here; anchor the collapse
+       chevron to the far right so it reads as a separate control, not
+       part of the sleep-timer button. */
+    #collapsePlayerBtn {
+      margin-left: auto;
+    }
+    .transport button {
+      padding: 5px;
+      min-width: 0;
+      min-height: 0;
+    }
+    .transport button.play-btn {
+      width: 32px;
+      height: 32px;
+    }
+    .transport button svg {
+      width: 15px;
+      height: 15px;
+    }
+    /* The player-bar is in wrap mode below 640px, so the transport
+       drops to its own row if it doesn't fit next to art+now. Either
+       way it's a single row of buttons, never the two-row stack. */
+  }
+
+/* ====== STICKY-HOVER FIX (touch) ======
+   Touch browsers latch :hover onto the tapped element until the next
+   tap anywhere else, so popup-menu rows (queue, sleep timer, context
+   menu, translation editor) stayed permanently highlighted after use.
+   On coarse pointers the resting styles are restored and :active gives
+   press feedback instead; hover-capable pointers keep the originals. */
+@media (hover: none), (pointer: coarse) {
+  .queue-header button:hover { color: var(--muted); background: none; }
+  .queue-item:hover { background: transparent; }
+  .queue-item.playing:hover { background: var(--panel-hi); }
+  .queue-item .q-remove:hover { color: var(--muted); background: none; }
+  .context-menu button:hover { background: none; color: var(--text); }
+  .sleep-panel-header button:hover { color: var(--muted); background: none; }
+  .sleep-option:hover { background: var(--panel); border-color: var(--line); color: var(--text); }
+  .tedit-header button:hover { color: var(--muted); background: none; }
+  .tedit-footer button:hover { border-color: var(--line); }
+  .tedit-footer .tedit-save:hover { background: var(--gold); }
+
+  .queue-header button:active,
+  .queue-item:active,
+  .context-menu button:active,
+  .sleep-panel-header button:active,
+  .sleep-option:active,
+  .tedit-header button:active,
+  .tedit-footer button:active {
+    background: var(--panel-hi);
+  }
+  .sleep-option:active { border-color: var(--gold-dim); color: var(--gold); }
+  .queue-item .q-remove:active { color: var(--danger); background: var(--panel-hi); }
+  .tedit-footer .tedit-save:active { background: #dcb35c; }
+}
+
+/* ====== MOTION ======
+   Short, compositor-friendly transitions make state changes easier to
+   follow without delaying input. Nothing here changes layout. */
+.view-stage {
+  animation: view-enter 220ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+/* Chromium/WebView's View Transition API keeps the old screen visible
+   while Preact renders the next one, giving real outgoing + incoming
+   motion. The .view-stage animation above remains the fallback. */
+html.view-transitions-supported main#main {
+  view-transition-name: crate-screen;
+}
+html.view-transitions-supported .view-stage {
+  animation: none;
+}
+::view-transition-group(crate-screen) {
+  animation-duration: 220ms;
+}
+::view-transition-old(crate-screen) {
+  animation: screen-leave 140ms ease-in both;
+}
+::view-transition-new(crate-screen) {
+  animation: screen-arrive 220ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.player-bar {
+  opacity: 1;
+  transition: transform 220ms cubic-bezier(.2,.75,.25,1), opacity 160ms ease;
+}
+.player-bar.collapsed { opacity: 0; }
+.mini-player {
+  opacity: 0;
+  transition: transform 220ms cubic-bezier(.2,.75,.25,1), opacity 160ms ease;
+}
+.mini-player.visible { opacity: 1; }
+
+.queue-panel.open,
+.sleep-panel.open,
+.tedit-panel.open {
+  animation: overlay-enter 140ms ease-out both;
+}
+.queue-panel.open .queue-container,
+.tedit-panel.open .tedit-container {
+  animation: dialog-enter 190ms cubic-bezier(.2,.75,.25,1) both;
+}
+.sleep-panel.open .sleep-container {
+  animation: sheet-enter 210ms cubic-bezier(.2,.75,.25,1) both;
+}
+.context-menu.open,
+#lyricsPopup.open {
+  animation: pop-enter 150ms cubic-bezier(.2,.75,.25,1) both;
+}
+.context-menu.open { transform-origin: top left; }
+#lyricsPopup.open { transform-origin: bottom right; }
+.conn-popup.show {
+  animation: connection-pop-enter 150ms cubic-bezier(.2,.75,.25,1) both;
+  transform-origin: top center;
+}
+
+.art-wrap img,
+.track-header img,
+.art-thumb img,
+.mini-art img {
+  animation: image-reveal 180ms ease-out both;
+}
+.track-row,
+.queue-item,
+.sleep-option,
+.context-menu button,
+.tedit-footer button,
+.queue-header button,
+.sleep-panel-header button,
+.tedit-header button,
+.transport button,
+.mini-btn,
+#refreshBtn,
+#queueBtn,
+#collapsePlayerBtn,
+.crumb button {
+  transition: color 120ms ease, background-color 120ms ease,
+    border-color 120ms ease, opacity 120ms ease, transform 90ms ease;
+}
+.track-row.playing .playing-icon {
+  animation: playing-enter 180ms cubic-bezier(.2,.75,.25,1) both;
+}
+.sleep-badge.visible,
+#repeatBtn.repeat-one #repeatOneBadge {
+  animation: badge-enter 160ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+button:active:not(:disabled),
+.mini-player:active,
+.album-card:active .art-wrap {
+  transform: scale(.96);
+}
+.album-card.grid-centered .art-wrap {
+  animation: grid-album-focus 700ms cubic-bezier(.2,.75,.25,1) both;
+}
+.track-row:active,
+.queue-item:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 640px) {
+  .queue-panel.open .queue-container,
+  .tedit-panel.open .tedit-container {
+    animation-name: sheet-enter;
+  }
+}
+
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes screen-leave {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-10px); }
+}
+@keyframes screen-arrive {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes overlay-enter {
+  from { background-color: rgba(0,0,0,0); }
+}
+@keyframes dialog-enter {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes sheet-enter {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pop-enter {
+  from { opacity: 0; transform: scale(.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes connection-pop-enter {
+  from { opacity: 0; transform: translateX(-50%) scale(.96); }
+  to { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+@keyframes image-reveal {
+  from { opacity: 0; transform: scale(1.015); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes playing-enter {
+  from { opacity: 0; transform: scale(.7); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes badge-enter {
+  from { opacity: 0; transform: scale(.7); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes grid-album-focus {
+  0% { border-color: var(--line); box-shadow: 0 0 0 rgba(201,162,75,0); }
+  35% { border-color: var(--gold); box-shadow: 0 0 0 4px rgba(201,162,75,.2); }
+  100% { border-color: var(--gold-dim); box-shadow: 0 0 0 rgba(201,162,75,0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}
