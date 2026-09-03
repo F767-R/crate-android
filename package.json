@@ -11,7 +11,7 @@
     "prebuild": "npm run prepare:config",
     "build": "vite build",
     "pretest": "npm run prepare:config",
-    "test": "node tests/playback-smoke.mjs",
+    "test": "node tests/playback-smoke.mjs && node tests/library-lyrics-smoke.mjs",
     "preview": "vite preview",
     "sync": "npm run build && npx cap sync android",
     "open": "npx cap open android",

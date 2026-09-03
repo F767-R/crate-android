@@ -22,6 +22,7 @@ export const translationComplete = signal(false);
 
 export const albumDetailCache = signal(new Map());
 export const currentViewState = signal({ type: 'grid' });
+export const searchQuery = signal('');
 export const albumGridDOM = signal(null);
 export const albumGridScrollTop = signal(0);
 export const albumGridFocusAlbumId = signal(null);

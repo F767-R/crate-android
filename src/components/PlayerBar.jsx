@@ -10,8 +10,6 @@ import {
   currentTrack,
   repeatMode,
   shuffleOn,
-  allTracks,
-  allTracksFetched,
   isTranslated,
   trackTranslationCache,
   albumTranslationCache,
@@ -23,15 +21,15 @@ import {
   sleepEndTime,
   sleepMode,
   translationEditVisible,
-  userId,
-  musicLibraryId,
+  currentViewState,
 } from '../stores/state.js';
 import { config, qualityPreset, translateBatch, setDeeplServer } from '../config.js';
 import { audioShim } from '../utils/playerShim.js';
 import { handleNext, handlePrev, seekTo, togglePlayPause, toggleQuality } from '../utils/playbackControls.js';
 import { artistText, translatedTrackText } from '../utils/metadata.js';
-import { cachedImageUrl, getAllTracks } from '../utils/api.js';
-import { showNowPlayingTrack } from '../utils/navigation.js';
+import { cachedImageUrl } from '../utils/api.js';
+import { ensureAllTracksLoaded } from '../utils/libraryData.js';
+import { hideLyricsView, showLyricsView, showNowPlayingTrack } from '../utils/navigation.js';
 
 export default function PlayerBar() {
   const [volume, setVolume] = useState(1);
@@ -151,8 +149,19 @@ export default function PlayerBar() {
     audioShim.setVolume(vol);
   };
 
-  const openLyrics = () => {
-    lyricsVisible.value = !lyricsVisible.value;
+  const toggleLyrics = () => {
+    if (currentViewState.value.type === 'lyrics') {
+      hideLyricsView();
+      return;
+    }
+
+    const mobile = window.matchMedia?.('(max-width: 640px)').matches;
+    if (mobile) {
+      lyricsVisible.value = false;
+      showLyricsView();
+    } else {
+      lyricsVisible.value = !lyricsVisible.value;
+    }
   };
 
   const openSleepPanel = () => {
@@ -172,13 +181,7 @@ export default function PlayerBar() {
   };
 
   async function translateAllMetadata(force = false) {
-    let libraryTracks = allTracks.value;
-    if (!allTracksFetched.value) {
-      const data = await getAllTracks(userId.value, musicLibraryId.value);
-      libraryTracks = data.Items || [];
-      allTracks.value = libraryTracks;
-      allTracksFetched.value = true;
-    }
+    const libraryTracks = await ensureAllTracksLoaded();
 
     const items = [];
     const albums = Array.from(new Map(allAlbums.value.map(a => [a.Id, a])).values());
@@ -364,7 +367,12 @@ export default function PlayerBar() {
             >
               {preset.label}
             </button>
-            <button id="lyricsBtn" title="Show lyrics" onClick={openLyrics} class={lyricsVisible.value ? 'active' : ''}>
+            <button
+              id="lyricsBtn"
+              title="Show lyrics"
+              onClick={toggleLyrics}
+              class={lyricsVisible.value || currentViewState.value.type === 'lyrics' ? 'active' : ''}
+            >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm14 1v2h4V8h-4v2zm0 4v2h4v-2h-4z"/></svg>
             </button>
             <button id="translateBtn" ref={translateBtnRef} title="Translate visible text (long‑press for all)" onClick={translateBtnClick} class={isTranslated.value ? 'active' : ''}>

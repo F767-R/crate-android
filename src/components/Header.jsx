@@ -8,17 +8,16 @@ import {
   allAlbums,
   allTracksFetched,
   translationComplete,
-  currentViewState
+  searchQuery,
 } from '../stores/state.js';
 import { getAlbums } from '../utils/api.js';
 import { navigateToView, showAlbumGrid } from '../utils/navigation.js';
 
 export default function Header() {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showClearSearch, setShowClearSearch] = useState(false);
   const [connStatus, setConnStatus] = useState('connecting');
   const [showConnPopup, setShowConnPopup] = useState(false);
   const searchDebounceRef = useRef(null);
+  const searchInputRef = useRef(null);
 
   useEffect(() => {
     const checkConnection = async () => {
@@ -35,30 +34,47 @@ export default function Header() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleSearch = (e) => {
-    const query = e.target.value;
-    setSearchQuery(query);
-    setShowClearSearch(query.length > 0);
-    if (searchDebounceRef.current) {
-      clearTimeout(searchDebounceRef.current);
-    }
-    if (query.length >= 2) {
-      searchDebounceRef.current = setTimeout(() => {
-        navigateToView({ type: 'search', query });
-      }, 200);
-    }
-  };
+  useEffect(() => {
+    const blurSearchOutside = event => {
+      if (document.activeElement === searchInputRef.current
+        && event.target !== searchInputRef.current
+        && !event.target.closest?.('.search-container')) {
+        searchInputRef.current.blur();
+      }
+    };
+    document.addEventListener('pointerdown', blurSearchOutside, true);
+    return () => {
+      document.removeEventListener('pointerdown', blurSearchOutside, true);
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, []);
 
-  const clearSearch = () => {
-    setSearchQuery('');
-    setShowClearSearch(false);
+  const handleSearch = (e) => {
+    const rawQuery = e.currentTarget.value;
+    const query = rawQuery.trim();
+    searchQuery.value = rawQuery;
     if (searchDebounceRef.current) {
       clearTimeout(searchDebounceRef.current);
       searchDebounceRef.current = null;
     }
-    if (currentViewState.value.type === 'search') {
-      showAlbumGrid();
+    if (!query) {
+      showAlbumGrid({ restoreScroll: true });
+      return;
     }
+    searchDebounceRef.current = setTimeout(() => {
+      searchDebounceRef.current = null;
+      navigateToView({ type: 'search', query });
+    }, 350);
+  };
+
+  const clearSearch = () => {
+    searchQuery.value = '';
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+    showAlbumGrid({ restoreScroll: true });
+    searchInputRef.current?.focus();
   };
 
   const toggleQueue = () => {
@@ -103,16 +119,21 @@ export default function Header() {
         </button>
         <div class="search-container">
           <input
+            ref={searchInputRef}
             type="text"
             id="searchInput"
             placeholder="Search albums, artists, tracks…"
             autocomplete="off"
-            value={searchQuery}
+            value={searchQuery.value}
             onInput={handleSearch}
           />
           <button
             type="button"
-            class={`clear-search-btn ${!showClearSearch ? 'hidden' : ''}`}
+            class={`clear-search-btn ${!searchQuery.value ? 'hidden' : ''}`}
+            onPointerDown={event => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
             onClick={clearSearch}
             aria-label="Clear search"
             title="Clear search"

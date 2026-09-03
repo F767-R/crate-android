@@ -3,6 +3,7 @@ import {
   albumGridFollowPlayback,
   allAlbums,
   currentViewState,
+  previousViewState,
 } from '../stores/state.js';
 
 let centerRequestId = 0;
@@ -65,6 +66,18 @@ export function showAlbumGrid({ restoreScroll = false, centerAlbumId = null } = 
   // playback source asks the grid to follow it again.
   albumGridFocusAlbumId.value = null;
   albumGridFollowPlayback.value = false;
+}
+
+export function showLyricsView() {
+  if (currentViewState.value.type === 'lyrics') return;
+  previousViewState.value = currentViewState.value;
+  navigateToView({ type: 'lyrics' });
+}
+
+export function hideLyricsView() {
+  const previous = previousViewState.value;
+  previousViewState.value = null;
+  navigateToView(previous || { type: 'grid' });
 }
 
 export function showNowPlayingTrack(track) {

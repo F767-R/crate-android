@@ -7,6 +7,7 @@ import AlbumDetail from './AlbumDetail.jsx';
 import TrackList from './TrackList.jsx';
 import SearchResults from './SearchResults.jsx';
 import ArtistView from './ArtistView.jsx';
+import LyricsView from './LyricsView.jsx';
 
 export default function MainView() {
   const [loading, setLoading] = useState(true);
@@ -76,6 +77,10 @@ export default function MainView() {
     case 'artist':
       viewKey = `artist-${view.artistId}`;
       content = <ArtistView artistId={view.artistId} name={view.name} />;
+      break;
+    case 'lyrics':
+      viewKey = 'lyrics';
+      content = <LyricsView />;
       break;
     default:
       viewKey = 'grid';

@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { userId } from '../stores/state.js';
+import { fetchLyricsFromMultipleSources } from './lyricsSources.js';
 
 const API_HEADERS = {
   'X-Emby-Authorization': `MediaBrowser Client="${config.CLIENT_NAME}", Device="${config.DEVICE_ID}", DeviceId="${config.DEVICE_ID}", Version="${config.CLIENT_VERSION}"`,
@@ -38,7 +39,6 @@ export async function getAlbums(userId, libraryId, parentId = null) {
     SortOrder: 'Ascending',
     Recursive: 'true',
     Fields: 'PrimaryImageAspectRatio,MediaSourceCount',
-    Limit: '500',
   });
   return apiRequest(`/Users/${userId}/Items?${params}`);
 }
@@ -149,36 +149,38 @@ export async function getArtistAlbums(userId, artistId) {
   return apiRequest(`/Users/${userId}/Items?${params}`);
 }
 
-export async function searchItems(userId, query, limit = 50) {
-  const params = new URLSearchParams({
-    SearchTerm: query,
-    IncludeItemTypes: 'MusicAlbum,MusicArtist,Audio',
-    Limit: limit.toString(),
-    Fields: 'PrimaryImageAspectRatio,MediaSourceCount,ArtistItems',
-  });
-  return apiRequest(`/Users/${userId}/Items?${params}`);
-}
-
 export async function getItemInfo(userId, itemId) {
   return apiRequest(`/Users/${userId}/Items/${itemId}`);
 }
 
-export async function getLyrics(_userId, trackId) {
-  try {
-    const url = new URL(`${config.SERVER}/Items/${trackId}/Lyrics`);
-    url.searchParams.set('api_key', config.API_KEY);
-    const response = await fetch(url, { headers: API_HEADERS });
-    if (!response.ok) return null;
-    const text = await response.text();
-    if (!text.trim()) return null;
-    const trimmed = text.trim();
-    if (trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('"')) {
-      try { return JSON.parse(trimmed); } catch (_) {}
-    }
-    return text;
-  } catch {
-    return null;
+function authenticatedUrl(path, params = {}) {
+  const url = new URL(`${config.SERVER}${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null) url.searchParams.set(key, String(value));
   }
+  url.searchParams.set('api_key', config.API_KEY);
+  return url.toString();
+}
+
+export async function getLyrics(requestUserId, trackId, { signal } = {}) {
+  const activeUserId = requestUserId || userId.value || '';
+  return fetchLyricsFromMultipleSources({
+    endpointUrl: authenticatedUrl(`/Items/${trackId}/Lyrics`),
+    originalAudioUrl: authenticatedUrl(`/Audio/${trackId}/stream`, {
+      UserId: activeUserId,
+    }),
+    transcodedFlacUrl: authenticatedUrl(`/Audio/${trackId}/universal`, {
+      UserId: activeUserId,
+      DeviceId: config.DEVICE_ID,
+      Container: 'flac',
+      AudioCodec: 'flac',
+      TranscodingContainer: 'flac',
+      TranscodingProtocol: 'http',
+      MaxStreamingBitrate: 140000000,
+    }),
+    headers: API_HEADERS,
+    signal,
+  });
 }
 
 export function formatDuration(ticks) {

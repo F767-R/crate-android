@@ -53,7 +53,7 @@ const { initPlayerShim } = await import('../src/utils/playerShim.js');
 const controls = await import('../src/utils/playbackControls.js');
 const { qualityPreset } = await import('../src/config.js');
 const { parseLRC } = await import('../src/utils/lrcParser.js');
-const { showAlbumGrid, showNowPlayingTrack } = await import('../src/utils/navigation.js');
+const { hideLyricsView, showAlbumGrid, showLyricsView, showNowPlayingTrack } = await import('../src/utils/navigation.js');
 
 initNativeBridge();
 initPlayerShim();
@@ -124,6 +124,20 @@ assert.equal(state.currentViewState.value.type, 'grid');
 assert.equal(state.currentViewState.value.centerAlbumId, 'album');
 assert.equal(state.albumGridFocusAlbumId.value, null);
 assert.equal(state.albumGridFollowPlayback.value, false);
+
+const previousView = {
+  type: 'search',
+  query: 'Singer',
+  gridReturnMode: 'restore',
+  gridReturnAlbumId: 'album',
+};
+state.currentViewState.value = previousView;
+showLyricsView();
+assert.equal(state.currentViewState.value.type, 'lyrics');
+assert.strictEqual(state.previousViewState.value, previousView);
+hideLyricsView();
+assert.strictEqual(state.currentViewState.value, previousView);
+assert.equal(state.previousViewState.value, null);
 
 qualityPreset.value = 'high';
 await controls.toggleQuality();
