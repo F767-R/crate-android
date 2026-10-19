@@ -96,6 +96,25 @@ for (const tag of ['LYRICS', 'UNSYNCED LYRICS', 'UNSYNCEDLYRICS', 'CUSTOM_LYRIC_
 assert.equal(parseFlacVorbisComments(flacWithComments({ TITLE: 'Example' })).TITLE, 'Example');
 assert.equal(extractLyricsFromFlac(new Uint8Array([1, 2, 3]).buffer), null);
 
+const alternateTags = flacWithComments({ LYRICS: 'Wrong version', COMMENT: 'Chosen version', CUSTOM_TEXT: '[00:04]Custom verse' });
+assert.equal(extractLyricsFromFlac(alternateTags, ' comment '), 'Chosen version');
+assert.equal(extractLyricsFromFlac(alternateTags, 'CUSTOM_TEXT'), '[00:04]Custom verse');
+assert.equal(extractLyricsFromFlac(alternateTags, 'MISSING'), null, 'an explicit missing tag must not silently fall back');
+const selectedCalls = [];
+const selectedOptions = {
+  endpointUrl: 'endpoint', originalAudioUrl: 'original', transcodedFlacUrl: 'transcoded',
+  fetchImpl: async url => {
+    selectedCalls.push(url);
+    return url === 'endpoint' ? textResponse('Jellyfin version') : binaryResponse(alternateTags);
+  },
+};
+assert.equal(await fetchLyricsFromMultipleSources({ ...selectedOptions, source: 'embedded', tag: 'COMMENT' }), 'Chosen version');
+assert.deepEqual(selectedCalls.splice(0), ['original'], 'explicit embedded selection bypasses Jellyfin and transcoding');
+assert.equal(await fetchLyricsFromMultipleSources({ ...selectedOptions, source: 'jellyfin' }), 'Jellyfin version');
+assert.deepEqual(selectedCalls.splice(0), ['endpoint']);
+assert.equal(await fetchLyricsFromMultipleSources({ ...selectedOptions, source: 'embedded', tag: 'MISSING' }), null);
+assert.deepEqual(selectedCalls.splice(0), ['original']);
+
 const endpointCalls = [];
 const endpointLyrics = await fetchLyricsFromMultipleSources({
   fetchImpl: async (url, options) => {
@@ -157,6 +176,59 @@ const nothing = await fetchLyricsFromMultipleSources({
   transcodedFlacUrl: 'transcoded',
 });
 assert.equal(nothing, null);
+
+const timedOutSources = [];
+const recoveredAfterTimeout = await fetchLyricsFromMultipleSources({
+  endpointUrl: 'endpoint', originalAudioUrl: 'original', transcodedFlacUrl: 'transcoded',
+  timeoutMs: 10,
+  fetchImpl: async (url, options) => {
+    timedOutSources.push({ url, signal: options.signal });
+    // Headers arrive immediately, but both text and audio body reads can stall.
+    if (url === 'endpoint') return { ok: true, text: () => new Promise(() => {}) };
+    if (url === 'original') return { ok: true, arrayBuffer: () => new Promise(() => {}) };
+    return binaryResponse(flacWithComments({ LYRICS: 'Recovered after timeout' }));
+  },
+});
+assert.equal(recoveredAfterTimeout, 'Recovered after timeout');
+assert.deepEqual(timedOutSources.map(source => source.url), ['endpoint', 'original', 'transcoded']);
+assert.equal(timedOutSources[0].signal.aborted, true, 'endpoint body timeout must abort its request');
+assert.equal(timedOutSources[1].signal.aborted, true, 'audio body timeout must abort its request');
+
+const cancelLyrics = new AbortController();
+const cancellationCalls = [];
+const cancelledLyrics = await fetchLyricsFromMultipleSources({
+  endpointUrl: 'endpoint', originalAudioUrl: 'original', transcodedFlacUrl: 'transcoded',
+  signal: cancelLyrics.signal,
+  fetchImpl: async (url, options) => {
+    cancellationCalls.push(url);
+    cancelLyrics.abort();
+    assert.equal(options.signal.aborted, true);
+    return textResponse('Must not appear after cancellation');
+  },
+});
+assert.equal(cancelledLyrics, null);
+assert.deepEqual(cancellationCalls, ['endpoint'], 'cancellation must not start audio fallbacks');
+assert.equal(await fetchLyricsFromMultipleSources({
+  endpointUrl: 'endpoint', signal: cancelLyrics.signal,
+  fetchImpl: () => { throw new Error('an already cancelled request must not run'); },
+}), null);
+
+let prefixCancelled = false;
+const largeAudio = new Uint8Array(200000);
+largeAudio.set(new Uint8Array(flacWithComments({ LYRICS: 'Prefix lyrics' })));
+const prefixLyrics = await fetchLyricsFromMultipleSources({
+  endpointUrl: 'endpoint', originalAudioUrl: 'original',
+  fetchImpl: async url => url === 'endpoint' ? textResponse('', 404) : {
+    ok: true,
+    body: { getReader: () => ({
+      async read() { return { done: false, value: largeAudio }; },
+      async cancel() { prefixCancelled = true; },
+      releaseLock() {},
+    }) },
+  },
+});
+assert.equal(prefixLyrics, 'Prefix lyrics');
+assert.equal(prefixCancelled, true, 'stop the stream after the 128 KiB prefix if the server ignores Range');
 
 assert.deepEqual(normalizeLyricsPayload({ Lyrics: '[00:02.00]Text' }).lines, [{ time: 2, text: 'Text' }]);
 assert.deepEqual(normalizeLyricsPayload({ Lyrics: [{ StartTicks: 30000000, Text: 'Ticks' }] }).lines, [{ time: 3, text: 'Ticks' }]);

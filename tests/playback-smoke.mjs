@@ -49,7 +49,7 @@ globalThis.window = {
 
 const state = await import('../src/stores/state.js');
 const { initNativeBridge } = await import('../src/utils/nativeBridge.js');
-const { initPlayerShim } = await import('../src/utils/playerShim.js');
+const { initPlayerShim, audioShim } = await import('../src/utils/playerShim.js');
 const controls = await import('../src/utils/playbackControls.js');
 const { qualityPreset } = await import('../src/config.js');
 const { parseLRC } = await import('../src/utils/lrcParser.js');
@@ -145,6 +145,33 @@ assert.equal(qualityPreset.value, 'low');
 assert.deepEqual(calls.findLast(([name]) => name === 'isCached'), ['isCached', { itemId: 'two' }]);
 assert.equal(calls.filter(([name]) => name === 'playStream').at(-1)[1].cache, true);
 assert.equal(state.playbackItemCached.value, true);
+
+// Recovery must retain the current queue position and seek location.
+emit('stateChanged', { isPlaying: true, position: 27000, isLocal: true, duration: 90000 });
+const previousIndex = state.currentIndex.value;
+emit('error', { message: 'Playback failed' });
+assert.equal(audioShim.paused, true);
+assert.equal(state.playbackPlaying.value, false);
+await controls.retryPlayback();
+const retried = calls.findLast(([name]) => name === 'playStream')[1];
+assert.equal(retried.startPositionMs, 27000);
+assert.equal(retried.cache, true, 'Retry preserves the LQ seek strategy');
+assert.equal(retried.bypassCache, true, 'Retry bypasses a possibly corrupt local copy');
+assert.equal(state.playbackCurrentTrack.value.Id, 'two');
+assert.equal(state.currentIndex.value, previousIndex);
+assert.equal(state.playbackError.value, null);
+
+const bridge = window.Capacitor.Plugins.MediaBridge;
+const originalPlay = bridge.playStream;
+const playbackReports = [];
+globalThis.fetch = async input => { playbackReports.push(String(input)); return { ok: true }; };
+bridge.playStream = async () => { throw new Error('Native start failed'); };
+assert.equal(await controls.retryPlayback(), false);
+assert.equal(state.playbackPlaying.value, false);
+assert.equal(state.playbackBuffering.value, false);
+assert.ok(state.playbackError.value);
+assert.equal(playbackReports.filter(value => new URL(value).pathname === '/Sessions/Playing').length, 0);
+bridge.playStream = originalPlay;
 
 console.log('playback smoke test passed');
 process.exit(0);

@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict';
+import { accentFromPixels, accentFromImage } from '../src/utils/accentColor.js';
+const pixels = (...rgba) => new Uint8ClampedArray(rgba.flat());
+assert.equal(accentFromPixels(pixels([255,0,0,255],[240,20,20,255])), 'hsl(0 90% 68%)');
+assert.equal(accentFromPixels(pixels([0,255,0,255],[0,255,0,255],[255,0,0,255])), 'hsl(120 90% 68%)');
+for (const data of [[],[0,0,0,255],[255,255,255,255],[128,128,128,255],[255,0,0,0]]) {
+  assert.equal(accentFromPixels(pixels(data)), null, 'empty, grey and transparent art use the fallback');
+}
+assert.equal(accentFromPixels(pixels([255,0,0,100],[0,0,255,255])), 'hsl(240 90% 68%)');
+const controller = new AbortController();
+controller.abort();
+assert.equal(await accentFromImage('blob:aborted', {signal:controller.signal}), null);
+assert.equal(await accentFromImage(''), null);
+
+const storage = new Map();
+globalThis.localStorage = {getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)};
+const prefs = await import('../src/stores/lyrics.js');
+assert.equal(prefs.lyricsFontScale.value,1);
+assert.equal(prefs.romajiEnabled.value,true);
+assert.equal(prefs.accentEnabled.value,true);
+prefs.setLyricsFontScale(1.23);
+assert.equal(prefs.lyricsFontScale.value,1.25);
+prefs.setLyricsFontScale(4);
+assert.equal(prefs.lyricsFontScale.value,1.3);
+prefs.setLyricsFontScale(-1);
+assert.equal(prefs.lyricsFontScale.value,.7);
+prefs.setLyricsFontScale('bad');
+assert.equal(prefs.lyricsFontScale.value,1);
+prefs.setLyricsFontScale(1.2);
+prefs.setRomajiEnabled(false);
+prefs.setAccentEnabled(false);
+const restored = await import('../src/stores/lyrics.js?restored');
+assert.equal(restored.lyricsFontScale.value,1.2);
+assert.equal(restored.romajiEnabled.value,false);
+assert.equal(restored.accentEnabled.value,false);
+storage.set('crateLyricsFontScale','1.6');
+const migrated = await import('../src/stores/lyrics.js?migrated');
+assert.equal(migrated.lyricsFontScale.value,1.3, 'previously saved large size clamps to the new maximum');
+storage.set('crateLyricsFontScale','bad');
+const invalid = await import('../src/stores/lyrics.js?invalid');
+assert.equal(invalid.lyricsFontScale.value,1);
+globalThis.localStorage={getItem(){throw new Error('unavailable');},setItem(){throw new Error('full');}};
+const unavailable=await import('../src/stores/lyrics.js?unavailable');
+unavailable.setAccentEnabled(false);
+unavailable.setLyricsFontScale(.9);
+assert.equal(unavailable.lyricsFontScale.value,.9);
+assert.equal(unavailable.accentEnabled.value,false);
+console.log('Lyrics appearance passed: dominant color, grayscale/transparent fallback, aborted loading, saved preferences, bounds, rounding and unavailable storage.');
