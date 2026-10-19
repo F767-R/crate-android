@@ -18,12 +18,14 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.Timeline;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.source.ForwardingTimeline;
 import androidx.media3.session.DefaultMediaNotificationProvider;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
@@ -35,9 +37,17 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Real audio playback service. ExoPlayer does the actual decoding and
@@ -65,19 +75,32 @@ import java.util.concurrent.Executors;
  * onStartCommand NOTE below for why no placeholder notification is posted
  * here).
  */
-public class PlaybackService extends MediaSessionService {
+public class PlaybackService extends MediaSessionService implements NativePlaybackCoordinator.Backend {
 
     private static final String CHANNEL_ID = "crate_playback_channel";
     private static final int MEDIA_NOTIFICATION_ID = 1000;
-    private static final String FILE_CACHE_DIR_NAME = "file_cache";
-
-    private static PlaybackService instance;
+    private static volatile PlaybackService instance;
+    private static final Handler readinessHandler = new Handler(Looper.getMainLooper());
+    private static final List<Runnable> readyCalls = new ArrayList<>();
 
     private ExoPlayer player;
     private MediaSession mediaSession;
+    private Player.Listener pendingStartEnforcer;
+    private NativePlaybackCoordinator playbackCoordinator;
+    private NativeSessionReporter sessionReporter;
+    private long streamStartOffsetMs;
+    private boolean currentSourceIsTranscode;
     private ExecutorService downloadExecutor;
     private ExecutorService artworkExecutor;
-    private File fileCacheDir;
+    private NativeCacheStore cacheStore;
+    private volatile boolean destroyed;
+    private volatile long cacheGeneration;
+    private final Set<HttpURLConnection> cacheConnections = ConcurrentHashMap.newKeySet();
+    private volatile Runnable delayedCacheDownload;
+    private String currentCachedAudioName;
+    private String currentCachedArtworkName;
+    private long currentPlaybackRequest = -1L;
+    private final AtomicLong mediaRequestSequence = new AtomicLong();
     private final ConcurrentHashMap<String, Boolean> downloading = new ConcurrentHashMap<>();
 
     // Every player interaction from outside (i.e. from MediaBridgePlugin,
@@ -95,7 +118,11 @@ public class PlaybackService extends MediaSessionService {
         public void run() {
             if (player == null) return;
             if (player.isPlaying()) {
-                emitState();
+                if (usesNativeSession()) {
+                    sessionReporter.progress(nativePositionMs(), !nativeWantsPlaying(), false);
+                    playbackCoordinator.positionTick();
+                }
+                else emitState();
                 mainHandler.postDelayed(this, POSITION_EMIT_INTERVAL_MS);
             }
         }
@@ -118,6 +145,26 @@ public class PlaybackService extends MediaSessionService {
     public static PlaybackService getInstance() {
         return instance;
     }
+
+    /** Ordered readiness queue: unlike timed play retries, relative commands cannot overtake. */
+    static void whenReady(android.content.Context context, Consumer<PlaybackService> callback, Runnable unavailable) {
+        readinessHandler.post(() -> {
+            if (instance != null && !instance.destroyed) { callback.accept(instance); return; }
+            Runnable task = () -> {
+                if (instance != null && !instance.destroyed) callback.accept(instance);
+                else unavailable.run();
+            };
+            readyCalls.add(task);
+            try { ensureStarted(context); }
+            catch (Exception ignored) { readyCalls.remove(task); unavailable.run(); return; }
+            readinessHandler.postDelayed(() -> {
+                if (readyCalls.remove(task)) unavailable.run();
+            }, 5000L);
+        });
+    }
+
+    NativePlaybackCoordinator coordinator() { return playbackCoordinator; }
+    private boolean usesNativeSession() { return playbackCoordinator != null && playbackCoordinator.isActive(); }
 
     /**
      * Boots the service if it isn't running yet. Called from
@@ -149,11 +196,11 @@ public class PlaybackService extends MediaSessionService {
     @Override
     public void onCreate() {
         super.onCreate();
-        instance = this;
         createNotificationChannel();
 
-        fileCacheDir = new File(getFilesDir(), FILE_CACHE_DIR_NAME);
-        if (!fileCacheDir.exists()) fileCacheDir.mkdirs();
+        cacheStore = NativeCacheStore.get(this);
+        playbackCoordinator = new NativePlaybackCoordinator(this, this);
+        sessionReporter = new NativeSessionReporter();
 
         // Range: bytes=0- forces direct-play responses down the 206 path
         // so the INITIAL open (which sends no Range header) still carries
@@ -233,6 +280,55 @@ public class PlaybackService extends MediaSessionService {
         // MediaBridgePlugin.emitNext()/emitPrev().
         Player sessionPlayer = new ForwardingPlayer(player) {
             @Override
+            public void setPlayWhenReady(boolean playWhenReady) {
+                if (usesNativeSession()) {
+                    if (playWhenReady) playbackCoordinator.resume(); else playbackCoordinator.pause();
+                    return;
+                }
+                PlaybackRequestGate.SHARED.setDesiredPlaying(playWhenReady);
+                applyLatestPlaybackIntent();
+            }
+
+            @Override
+            public void play() { setPlayWhenReady(true); }
+
+            @Override
+            public void pause() { setPlayWhenReady(false); }
+
+            @Override
+            public void stop() {
+                if (usesNativeSession()) { playbackCoordinator.stop(); return; }
+                PlaybackService.this.stop(PlaybackRequestGate.SHARED.stop());
+            }
+
+            @Override public long getCurrentPosition() { return usesNativeSession() ? nativePositionMs() : super.getCurrentPosition(); }
+            @Override public long getContentPosition() { return getCurrentPosition(); }
+            @Override public long getDuration() { return usesNativeSession() ? nativeDurationMs() : super.getDuration(); }
+            @Override public long getContentDuration() { return getDuration(); }
+            @Override public long getBufferedPosition() {
+                return super.getBufferedPosition() + (usesNativeSession() && currentSourceIsTranscode ? streamStartOffsetMs : 0L);
+            }
+            @Override public long getContentBufferedPosition() { return getBufferedPosition(); }
+            @Override public Timeline getCurrentTimeline() {
+                Timeline timeline = super.getCurrentTimeline();
+                if (!usesNativeSession() || !currentSourceIsTranscode || timeline.isEmpty()) return timeline;
+                return new ForwardingTimeline(timeline) {
+                    @Override public Timeline.Window getWindow(int index, Timeline.Window window, long projectionUs) {
+                        super.getWindow(index, window, projectionUs);
+                        window.durationUs = nativeDurationMs() * 1000L;
+                        window.defaultPositionUs = streamStartOffsetMs * 1000L;
+                        window.isSeekable = true;
+                        return window;
+                    }
+                    @Override public Timeline.Period getPeriod(int index, Timeline.Period period, boolean setIds) {
+                        super.getPeriod(index, period, setIds);
+                        period.durationUs = nativeDurationMs() * 1000L;
+                        return period;
+                    }
+                };
+            }
+
+            @Override
             public Player.Commands getAvailableCommands() {
                 return super.getAvailableCommands().buildUpon()
                     .add(Player.COMMAND_SEEK_TO_NEXT)
@@ -261,10 +357,10 @@ public class PlaybackService extends MediaSessionService {
             }
 
             @Override
-            public boolean hasNextMediaItem() { return true; }
+            public boolean hasNextMediaItem() { return usesNativeSession() ? playbackCoordinator.hasNext() : true; }
 
             @Override
-            public boolean hasPreviousMediaItem() { return true; }
+            public boolean hasPreviousMediaItem() { return usesNativeSession() ? playbackCoordinator.hasCurrent() : true; }
 
             // Seeks arriving from the MediaSession (lockscreen /
             // quick-settings card drag, Bluetooth AVRCP SEEK_TO) must NOT
@@ -275,38 +371,43 @@ public class PlaybackService extends MediaSessionService {
             // the URL at the offset via StartTimeTicks.
             @Override
             public void seekTo(long positionMs) {
+                if (usesNativeSession()) { playbackCoordinator.seekAbsolute(positionMs, null); return; }
+                clearStartEnforcer();
                 if (currentItemIsLocal) {
+                    PlaybackRequestGate.SHARED.requestSeek(positionMs);
                     player.seekTo(positionMs);
                 } else {
                     MediaBridgePlugin.emitSessionSeek(positionMs);
                 }
             }
 
+            @Override public void seekTo(int mediaItemIndex, long positionMs) { seekTo(positionMs); }
+
             @Override
             public void seekBack() {
-                long target = player.getCurrentPosition() - 5000;
+                long target = (usesNativeSession() ? nativePositionMs() : player.getCurrentPosition()) - 5000;
                 seekTo(Math.max(0, target));
             }
 
             @Override
             public void seekForward() {
-                long target = player.getCurrentPosition() + 5000;
-                long dur = player.getDuration();
+                long target = (usesNativeSession() ? nativePositionMs() : player.getCurrentPosition()) + 5000;
+                long dur = usesNativeSession() ? nativeDurationMs() : player.getDuration();
                 if (dur > 0 && target > dur - 1500) target = Math.max(0, dur - 1500);
                 seekTo(target);
             }
 
             @Override
-            public void seekToNext() { MediaBridgePlugin.emitNext(); }
+            public void seekToNext() { if (usesNativeSession()) playbackCoordinator.nextTrack(); else MediaBridgePlugin.emitNext(); }
 
             @Override
-            public void seekToNextMediaItem() { MediaBridgePlugin.emitNext(); }
+            public void seekToNextMediaItem() { seekToNext(); }
 
             @Override
-            public void seekToPrevious() { MediaBridgePlugin.emitPrev(); }
+            public void seekToPrevious() { if (usesNativeSession()) playbackCoordinator.previousTrack(); else MediaBridgePlugin.emitPrev(); }
 
             @Override
-            public void seekToPreviousMediaItem() { MediaBridgePlugin.emitPrev(); }
+            public void seekToPreviousMediaItem() { seekToPrevious(); }
         };
 
         // Session activity: the PendingIntent the OS fires when the user
@@ -353,6 +454,16 @@ public class PlaybackService extends MediaSessionService {
         // its internal startSelfIntent would otherwise re-post a duplicate).
         player.addListener(new Player.Listener() {
             @Override
+            public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                // Audio focus and unplugged headphones can change intent even
+                // while buffering, when onIsPlayingChanged has nothing to report.
+                if (usesNativeSession() && PlaybackRequestGate.SHARED.isCurrent(currentPlaybackRequest)) {
+                    PlaybackRequestGate.SHARED.setDesiredPlaying(playWhenReady);
+                }
+                emitState();
+            }
+
+            @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 if (isPlaying) {
                     startPositionEmitter();
@@ -366,7 +477,11 @@ public class PlaybackService extends MediaSessionService {
             public void onPlaybackStateChanged(int playbackState) {
                 if (playbackState == Player.STATE_ENDED) {
                     stopPositionEmitter();
-                    MediaBridgePlugin.emitTrackEnded();
+                    if (usesNativeSession()) {
+                        sessionReporter.stop(nativePositionMs());
+                        playbackCoordinator.ended();
+                    }
+                    else MediaBridgePlugin.emitTrackEnded();
                 }
                 emitState();
             }
@@ -374,14 +489,26 @@ public class PlaybackService extends MediaSessionService {
             @Override
             public void onPlayerError(PlaybackException error) {
                 stopPositionEmitter();
-                MediaBridgePlugin.emitError(error.getMessage() != null
-                    ? error.getMessage() : "ExoPlayer error " + error.errorCode);
+                clearStartEnforcer();
+                // Exception messages can contain the full authenticated stream URL.
+                publishPlaybackError("Playback failed (code " + error.errorCode
+                    + "). Check your server or tailnet connection and retry.");
                 emitState();
             }
         });
 
-        downloadExecutor = Executors.newSingleThreadExecutor();
-        artworkExecutor = Executors.newSingleThreadExecutor();
+        downloadExecutor = cacheExecutor();
+        artworkExecutor = cacheExecutor();
+        instance = this;
+        List<Runnable> waiting = new ArrayList<>(readyCalls);
+        readyCalls.clear();
+        for (Runnable task : waiting) task.run();
+    }
+
+    private static ExecutorService cacheExecutor() {
+        // Rapid track changes must not create an unbounded queue of mirror downloads.
+        return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(2), new ThreadPoolExecutor.AbortPolicy());
     }
 
     private void startPositionEmitter() {
@@ -391,6 +518,12 @@ public class PlaybackService extends MediaSessionService {
 
     private void stopPositionEmitter() {
         mainHandler.removeCallbacks(positionEmitter);
+    }
+
+    /** Main-thread only: one pending initial seek belongs to exactly one media request. */
+    private void clearStartEnforcer() {
+        if (pendingStartEnforcer != null && player != null) player.removeListener(pendingStartEnforcer);
+        pendingStartEnforcer = null;
     }
 
     // NOTE: onStartCommand is intentionally NOT overridden. The default
@@ -430,14 +563,20 @@ public class PlaybackService extends MediaSessionService {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        if (player == null || !player.isPlaying()) {
+        if (player == null || !player.getPlayWhenReady()
+                || player.getPlaybackState() == Player.STATE_IDLE || player.getPlaybackState() == Player.STATE_ENDED) {
             stopSelf();
         }
     }
 
     @Override
     public void onDestroy() {
-        stopPositionEmitter();
+        destroyed = true;
+        if (playbackCoordinator != null) playbackCoordinator.close();
+        if (sessionReporter != null) sessionReporter.close(nativePositionMs());
+        cancelCacheWork();
+        mainHandler.removeCallbacksAndMessages(null);
+        clearStartEnforcer();
         if (downloadExecutor != null) {
             downloadExecutor.shutdownNow();
             downloadExecutor = null;
@@ -454,6 +593,8 @@ public class PlaybackService extends MediaSessionService {
             player.release();
             player = null;
         }
+        cacheStore.audio.retainPin(null);
+        cacheStore.artwork.retainPin(null);
         instance = null;
         super.onDestroy();
     }
@@ -496,18 +637,28 @@ public class PlaybackService extends MediaSessionService {
 
     public void playStream(String url, long startPositionMs,
                            String title, String artist,
-                           String artUrl, long durationMs, boolean allowCache) {
-        if (url == null || url.isEmpty()) {
-            MediaBridgePlugin.emitError("playStream called with empty url");
+                           String artUrl, long durationMs, boolean allowCache, boolean bypassCache,
+                           long requestSequence) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(() -> playStream(url, startPositionMs, title, artist, artUrl,
+                durationMs, allowCache, bypassCache, requestSequence));
             return;
         }
+        if (destroyed || !PlaybackRequestGate.SHARED.isCurrent(requestSequence)) return;
+        if (url == null || url.isEmpty()) {
+            publishPlaybackError("playStream called with empty url");
+            return;
+        }
+        if (destroyed) return;
         // Resolve what to play. Cache/FileProvider problems must never
         // kill the play call — worst case we stream the original URL.
         final String itemId = extractItemId(url);
+        final boolean useCache = allowCache && !bypassCache;
         String uriToPlay = url;
         boolean usingCache = false;
         try {
-            File cachedFile = itemId != null ? getCachedFile(itemId) : null;
+            File cachedFile = itemId != null && useCache
+                ? cacheStore.audio.find(itemId + ".audio", true) : null;
             // Gate cache USE on allowCache, not just cache DOWNLOAD. The
             // shim passes cache: qualityPreset === 'low', so when the user
             // toggles to HD the native side must NOT silently serve the LQ
@@ -515,7 +666,7 @@ public class PlaybackService extends MediaSessionService {
             // but the audio stays LQ. (The "regardless of the flag" comment
             // below is now stale; the gate below is the single source of
             // truth for both use and download.)
-            if (cachedFile != null && allowCache) {
+            if (cachedFile != null && useCache) {
                 // Direct file:// URI, NOT FileProvider content://. The app
                 // process owns these cache files, so no provider grant is
                 // needed — and ContentDataSource (content://) exposes no
@@ -526,7 +677,7 @@ public class PlaybackService extends MediaSessionService {
                 // the local Ogg fully seekable.
                 uriToPlay = Uri.fromFile(cachedFile).toString();
                 usingCache = true;
-            } else if (itemId != null && allowCache) {
+            } else if (itemId != null && useCache) {
                 // Opt-in only: the web layer enables this for the small
                 // LQ/Opus files. Lossless FLAC is streamed, never mirrored
                 // to disk. The cache USE above is also gated on allowCache,
@@ -543,28 +694,48 @@ public class PlaybackService extends MediaSessionService {
                 // first. The download is idempotent (cache-exists check +
                 // per-item in-flight guard), so duplicate schedules and
                 // seek-restarts are harmless.
-                mainHandler.postDelayed(() -> downloadFileToCache(url, itemId), 8_000);
+                final long generation = cacheGeneration;
+                mainHandler.post(() -> {
+                    if (destroyed || generation != cacheGeneration) return;
+                    if (delayedCacheDownload != null) mainHandler.removeCallbacks(delayedCacheDownload);
+                    delayedCacheDownload = () -> {
+                        delayedCacheDownload = null;
+                        if (!destroyed && generation == cacheGeneration
+                                && itemId.equals(currentItemId)) downloadFileToCache(url, itemId);
+                    };
+                    mainHandler.postDelayed(delayedCacheDownload, 8_000);
+                });
             }
         } catch (Exception e) {
             uriToPlay = url;
-            MediaBridgePlugin.emitError("cache lookup failed, streaming instead: " + e.getMessage());
+            android.util.Log.w("CratePlayback", "Cache lookup unavailable; streaming instead");
         }
         final String playUri = uriToPlay;
+        // Media IDs can be exposed by system/session diagnostics; never use an authenticated URL.
+        final String requestMediaId = "crate-playback-" + mediaRequestSequence.incrementAndGet();
         final boolean fromCache = usingCache;
-        this.currentItemIsLocal = playUri.startsWith("content:") || playUri.startsWith("file:");
         // Never put artwork network I/O in front of playback. Use an already
         // cached local image immediately; a missing image is downloaded on a
         // dedicated worker and patched into the MediaItem afterward.
         final String resolvedArtUri = cachedArtworkUri(artUrl);
-        mainHandler.post(() -> {
+        Runnable startPlayback = () -> {
             try {
-                if (player == null) return;
+                if (destroyed || player == null
+                        || !PlaybackRequestGate.SHARED.isCurrent(requestSequence)) {
+                    cacheStore.audio.retainPin(currentCachedAudioName);
+                    cacheStore.artwork.retainPin(currentCachedArtworkName);
+                    return;
+                }
                 MediaItem previousItem = player.getCurrentMediaItem();
                 boolean sameTrack = itemId != null && itemId.equals(currentItemId);
                 this.trackDurationMs = durationMs;
                 this.currentItemId = itemId;
+                this.currentPlaybackRequest = requestSequence;
+                this.currentItemIsLocal = playUri.startsWith("content:") || playUri.startsWith("file:");
+                this.currentSourceIsTranscode = allowCache && !this.currentItemIsLocal;
+                this.streamStartOffsetMs = this.currentSourceIsTranscode ? Math.max(0L, startPositionMs) : 0L;
                 MediaItem.Builder itemBuilder = new MediaItem.Builder()
-                    .setMediaId(playUri)
+                    .setMediaId(requestMediaId)
                     .setUri(playUri);
 
                 MediaMetadata.Builder meta = new MediaMetadata.Builder()
@@ -602,11 +773,10 @@ public class PlaybackService extends MediaSessionService {
                 // direct-play request" — the web layer sets cache=false
                 // exactly because the HD FLAC is too large to cache, which
                 // coincides with Jellyfin serving it via direct play. The
-                // same flag now controls both USE (cache lookup above) and
-                // DOWNLOAD (the postDelayed branch below), and now also
-                // the pre-seek decision here.
+                // Cache bypass on Retry is separate: an LQ transcode still
+                // starts at the URL offset and must not also pre-seek here.
                 long effectiveStart = (fromCache || !allowCache)
-                    ? Math.max(0, startPositionMs)
+                    ? PlaybackRequestGate.SHARED.initialPositionMs(requestSequence, startPositionMs)
                     : 0L;
 
                 // The constructor start position is NOT reliable: Ogg (and
@@ -617,15 +787,20 @@ public class PlaybackService extends MediaSessionService {
                 // player reaches STATE_READY; if the constructor position
                 // landed correctly this seek is a harmless no-op.
                 final long targetStartMs = effectiveStart;
-                android.util.Log.d("CratePlayback", "playStream: uri=" + playUri
-                    + " fromCache=" + fromCache
+                clearStartEnforcer();
+                android.util.Log.d("CratePlayback", "playStream: fromCache=" + fromCache
                     + " targetStart=" + targetStartMs);
                 final Player.Listener startEnforcer = new Player.Listener() {
                     @Override
                     public void onPlaybackStateChanged(int playbackState) {
                         if (playbackState != Player.STATE_READY) return;
+                        if (player == null) return;
                         player.removeListener(this);
-                        if (player == null || targetStartMs <= 0) return;
+                        if (pendingStartEnforcer == this) pendingStartEnforcer = null;
+                        if (!PlaybackRequestGate.SHARED.isCurrent(requestSequence)) return;
+                        MediaItem readyItem = player.getCurrentMediaItem();
+                        if (readyItem == null || !requestMediaId.equals(readyItem.mediaId)) return;
+                        if (targetStartMs <= 0) return;
                         long pos = player.getCurrentPosition();
                         long dur = player.getDuration();
                         // The cached/transcoded file can be SHORTER than
@@ -647,26 +822,36 @@ public class PlaybackService extends MediaSessionService {
                         }
                     }
                 };
+                pendingStartEnforcer = startEnforcer;
                 player.addListener(startEnforcer);
 
                 player.setMediaItem(itemBuilder.build(), effectiveStart);
+                currentCachedAudioName = fromCache ? itemId + ".audio" : null;
+                cacheStore.audio.retainPin(currentCachedAudioName);
+                retainArtworkPin(player.getCurrentMediaItem().mediaMetadata.artworkUri);
+                player.setPlayWhenReady(PlaybackRequestGate.SHARED.shouldPlay(requestSequence));
                 player.prepare();
-                player.play();
             } catch (Exception e) {
-                MediaBridgePlugin.emitError("playStream failed: " + e.getMessage());
+                clearStartEnforcer();
+                cacheStore.audio.retainPin(currentCachedAudioName);
+                publishPlaybackError("Unable to start playback. Check your server connection and retry.");
             }
-        });
+        };
+        startPlayback.run();
 
         if (resolvedArtUri == null && artUrl != null && !artUrl.isEmpty()
             && artworkExecutor != null) {
-            artworkExecutor.submit(() -> {
+            submitArtwork(() -> {
                 final String downloadedArtUri = resolveArtworkUri(artUrl);
                 if (downloadedArtUri == null || downloadedArtUri.isEmpty()) return;
                 mainHandler.post(() -> {
                     try {
-                        if (player == null) return;
+                        if (destroyed || player == null) return;
                         MediaItem current = player.getCurrentMediaItem();
-                        if (current == null || !playUri.equals(current.mediaId)) return;
+                        if (current == null || !requestMediaId.equals(current.mediaId)) {
+                            cacheStore.artwork.retainPin(currentCachedArtworkName);
+                            return;
+                        }
                         Uri artworkUri = Uri.parse(downloadedArtUri);
                         if (artworkUri.equals(current.mediaMetadata.artworkUri)) return;
                         MediaMetadata metadata = current.mediaMetadata.buildUpon()
@@ -674,9 +859,10 @@ public class PlaybackService extends MediaSessionService {
                             .build();
                         player.replaceMediaItem(player.getCurrentMediaItemIndex(),
                             current.buildUpon().setMediaMetadata(metadata).build());
+                        retainArtworkPin(artworkUri);
                     } catch (Exception e) {
                         android.util.Log.w("CratePlayback",
-                            "deferred artwork update failed: " + e.getMessage());
+                            "Deferred artwork update unavailable");
                     }
                 });
             });
@@ -684,21 +870,27 @@ public class PlaybackService extends MediaSessionService {
     }
 
     public void pause() {
-        mainHandler.post(() -> {
-            if (player != null) player.pause();
-        });
+        mainHandler.post(() -> { if (usesNativeSession()) playbackCoordinator.pause(); else applyLatestPlaybackIntent(); });
     }
 
     public void resume() {
-        mainHandler.post(() -> {
-            if (player != null) player.play();
-        });
+        mainHandler.post(() -> { if (usesNativeSession()) playbackCoordinator.resume(); else applyLatestPlaybackIntent(); });
     }
 
-    public void seek(long positionMs) {
+    /** Main-thread only. A pending selection retains pause/resume intent until it loads. */
+    private void applyLatestPlaybackIntent() {
+        if (destroyed || player == null) return;
+        player.setPlayWhenReady(PlaybackRequestGate.SHARED.shouldPlay(currentPlaybackRequest));
+    }
+
+    public void seek(long positionMs, long requestSequence) {
         mainHandler.post(() -> {
+            if (destroyed || !PlaybackRequestGate.SHARED.isCurrent(requestSequence)
+                    || currentPlaybackRequest != requestSequence) return;
+            clearStartEnforcer();
             if (player != null) {
-                long target = Math.max(0, positionMs);
+                // Multiple queued seeks for this selection all observe the newest target.
+                long target = PlaybackRequestGate.SHARED.initialPositionMs(requestSequence, positionMs);
                 long dur = player.getDuration();
                 // A target at/after the real end throws the player into
                 // ENDED immediately; land just before the end instead.
@@ -713,13 +905,23 @@ public class PlaybackService extends MediaSessionService {
         });
     }
 
-    public void stop() {
-        stopPositionEmitter();
+    public void stop(long requestSequence) {
         mainHandler.post(() -> {
+            if (destroyed || !PlaybackRequestGate.SHARED.isCurrent(requestSequence)) return;
+            if (usesNativeSession()) { playbackCoordinator.stop(); return; }
+            stopPositionEmitter();
+            clearStartEnforcer();
             if (player != null) {
                 player.stop();
                 player.clearMediaItems();
             }
+            currentItemId = null;
+            currentPlaybackRequest = -1L;
+            currentItemIsLocal = false;
+            currentCachedAudioName = null;
+            currentCachedArtworkName = null;
+            cacheStore.audio.retainPin(null);
+            cacheStore.artwork.retainPin(null);
         });
     }
 
@@ -732,9 +934,8 @@ public class PlaybackService extends MediaSessionService {
 
     /** Returns the fully-downloaded local file for an item, or null. */
     public File getCachedFile(String itemId) {
-        if (itemId == null || fileCacheDir == null) return null;
-        File f = new File(fileCacheDir, itemId + ".audio");
-        return f.exists() && f.length() > 0 ? f : null;
+        return itemId == null || cacheStore == null ? null
+            : cacheStore.audio.find(itemId + ".audio", false);
     }
 
     public boolean isCached(String itemId) {
@@ -747,15 +948,18 @@ public class PlaybackService extends MediaSessionService {
      * Media3 detects a metadata-only replacement and applies it without
      * interrupting playback. This is what makes the lockscreen /
      * quick-settings widget switch to translated text mid-track.
-     * Blocking artwork resolution; must NOT run on the main thread.
+     * The item ID guards late JS updates; optional artwork never delays metadata.
      */
-    public void updateNowPlaying(String title, String artist, String artUrl, long durationMs) {
-        final String resolvedArt = (artUrl != null && !artUrl.isEmpty()) ? resolveArtworkUri(artUrl) : null;
+    public void updateNowPlaying(String title, String artist, String artUrl, long durationMs,
+                                 String itemId) {
         mainHandler.post(() -> {
             try {
-                if (player == null) return;
+                if (destroyed || player == null) return;
                 MediaItem current = player.getCurrentMediaItem();
-                if (current == null) return;
+                if (current == null || itemId == null || !itemId.equals(currentItemId)) return;
+                if (usesNativeSession()) playbackCoordinator.updateMetadata(itemId, title, artist, artUrl, durationMs);
+                final String requestMediaId = current.mediaId;
+                final String resolvedArt = cachedArtworkUri(artUrl);
                 MediaMetadata.Builder meta = current.mediaMetadata.buildUpon();
                 if (title != null && !title.isEmpty()) meta.setTitle(title);
                 if (artist != null && !artist.isEmpty()) meta.setArtist(artist);
@@ -768,8 +972,34 @@ public class PlaybackService extends MediaSessionService {
                 }
                 player.replaceMediaItem(player.getCurrentMediaItemIndex(),
                     current.buildUpon().setMediaMetadata(meta.build()).build());
+                retainArtworkPin(player.getCurrentMediaItem().mediaMetadata.artworkUri);
+                if (resolvedArt == null && artUrl != null && !artUrl.isEmpty()) {
+                    submitArtwork(() -> {
+                        final String downloadedArt = resolveArtworkUri(artUrl);
+                        if (downloadedArt == null) return;
+                        mainHandler.post(() -> {
+                            try {
+                                if (destroyed || player == null) return;
+                                MediaItem latest = player.getCurrentMediaItem();
+                                if (latest == null || !requestMediaId.equals(latest.mediaId)) {
+                                    cacheStore.artwork.retainPin(currentCachedArtworkName);
+                                    return;
+                                }
+                                Uri artworkUri = Uri.parse(downloadedArt);
+                                // Use latest metadata so delayed art cannot undo a newer translation edit.
+                                MediaMetadata latestMetadata = latest.mediaMetadata.buildUpon()
+                                    .setArtworkUri(artworkUri).build();
+                                player.replaceMediaItem(player.getCurrentMediaItemIndex(),
+                                    latest.buildUpon().setMediaMetadata(latestMetadata).build());
+                                retainArtworkPin(artworkUri);
+                            } catch (Exception ignored) {
+                                android.util.Log.w("CratePlayback", "Now-playing artwork update unavailable");
+                            }
+                        });
+                    });
+                }
             } catch (Exception e) {
-                android.util.Log.w("CratePlayback", "updateNowPlaying failed: " + e.getMessage());
+                android.util.Log.w("CratePlayback", "Now-playing metadata update unavailable");
             }
         });
     }
@@ -780,62 +1010,136 @@ public class PlaybackService extends MediaSessionService {
      * always load it. Falls back to the original URL on any failure.
      * Blocking; must NOT be called on the main thread.
      */
-    private File artworkCacheFile(String artUrl) throws Exception {
-        File dir = new File(getFilesDir(), "art_cache");
-        if (!dir.exists()) dir.mkdirs();
+    private String artworkCacheName(String artUrl) throws Exception {
         MessageDigest md = MessageDigest.getInstance("MD5");
         byte[] digest = md.digest(artUrl.getBytes(StandardCharsets.UTF_8));
         StringBuilder sb = new StringBuilder();
         for (byte b : digest) sb.append(String.format("%02x", b));
-        return new File(dir, sb + ".img");
+        return sb + ".img";
     }
 
     /** Non-blocking lookup used on the playback-critical path. */
     private String cachedArtworkUri(String artUrl) {
         if (artUrl == null || artUrl.isEmpty()) return null;
         try {
-            File file = artworkCacheFile(artUrl);
-            return file.exists() && file.length() > 0 ? Uri.fromFile(file).toString() : null;
+            File file = cacheStore.artwork.find(artworkCacheName(artUrl), true);
+            return file == null ? null : Uri.fromFile(file).toString();
         } catch (Exception e) {
             return null;
         }
     }
 
     private String resolveArtworkUri(String artUrl) {
-        if (artUrl == null || artUrl.isEmpty()) return null;
+        if (artUrl == null || artUrl.isEmpty() || destroyed) return null;
         try {
-            File f = artworkCacheFile(artUrl);
-            if (!f.exists() || f.length() == 0) {
-                File dir = f.getParentFile();
-                HttpURLConnection conn = (HttpURLConnection) new URL(artUrl).openConnection();
-                conn.setConnectTimeout(4000);
-                conn.setReadTimeout(6000);
-                conn.setInstanceFollowRedirects(true);
-                int code = conn.getResponseCode();
-                if (code != HttpURLConnection.HTTP_OK) {
-                    conn.disconnect();
-                    return artUrl;
-                }
-                InputStream in = conn.getInputStream();
-                File tmp = new File(dir, f.getName() + ".tmp");
-                FileOutputStream out = new FileOutputStream(tmp);
-                byte[] buf = new byte[8192];
-                int n;
-                long total = 0;
-                while ((n = in.read(buf)) != -1 && total < 5_000_000L) {
-                    out.write(buf, 0, n);
-                    total += n;
-                }
-                out.close();
-                in.close();
-                conn.disconnect();
-                if (total <= 0 || !tmp.renameTo(f)) return artUrl;
-            }
-            return Uri.fromFile(f).toString();
+            String name = artworkCacheName(artUrl);
+            File file = cacheStore.artwork.find(name, true);
+            if (file == null) file = downloadBounded(cacheStore.artwork, name, artUrl,
+                4000, 6000, 20_000L, NativeCacheStore.MAX_ARTWORK_FILE_BYTES, cacheGeneration);
+            if (file != null) cacheStore.artwork.find(name, true);
+            return file == null ? null : Uri.fromFile(file).toString();
         } catch (Exception e) {
-            android.util.Log.w("CratePlayback", "artwork cache failed: " + e.getMessage());
-            return artUrl;
+            // Do not forward authenticated URLs to logs or external renderers on failure.
+            android.util.Log.w("CratePlayback", "Artwork cache unavailable");
+            return null;
         }
+    }
+
+    private void submitArtwork(Runnable task) {
+        ExecutorService executor = artworkExecutor;
+        if (destroyed || executor == null) return;
+        final long generation = cacheGeneration;
+        try {
+            executor.submit(() -> {
+                if (!destroyed && generation == cacheGeneration) task.run();
+            });
+        } catch (RejectedExecutionException ignored) {
+            // Artwork is optional; a full queue must not interfere with playback.
+        }
+    }
+
+    /** Main-thread only: retain the current notification's completed artwork. */
+    private void retainArtworkPin(Uri uri) {
+        currentCachedArtworkName = uri != null && "file".equals(uri.getScheme())
+            ? uri.getLastPathSegment() : null;
+        cacheStore.artwork.retainPin(currentCachedArtworkName);
+    }
+
+    /** Cache-only network copy, with bounded size/time and cleanup on every exit path. */
+    private File downloadBounded(BoundedFileCache cache, String name, String url,
+                                 int connectTimeout, int readTimeout, long maximumTimeMs,
+                                 long maximumBytes, long generation) {
+        HttpURLConnection connection = null;
+        BoundedFileCache.Download download = null;
+        long deadline = android.os.SystemClock.elapsedRealtime() + maximumTimeMs;
+        try {
+            if (destroyed || generation != cacheGeneration) return null;
+            download = cache.begin(name);
+            if (download == null) return null;
+            connection = (HttpURLConnection) new URL(url).openConnection();
+            cacheConnections.add(connection);
+            connection.setRequestProperty("User-Agent", "C.R.A.T.E./1.0");
+            connection.setConnectTimeout(connectTimeout);
+            connection.setReadTimeout(readTimeout);
+            connection.setInstanceFollowRedirects(true);
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return null;
+            long expectedBytes = -1L;
+            String contentLength = connection.getHeaderField("Content-Length");
+            if (contentLength != null) {
+                try { expectedBytes = Long.parseLong(contentLength); }
+                catch (NumberFormatException ignored) { return null; }
+            }
+            if (expectedBytes > Math.min(maximumBytes, cache.limitBytes())) return null;
+            try (InputStream input = connection.getInputStream();
+                 FileOutputStream output = new FileOutputStream(download.temporary)) {
+                byte[] buffer = new byte[32 * 1024];
+                while (true) {
+                    if (destroyed || generation != cacheGeneration || download.cancelled
+                            || Thread.currentThread().isInterrupted()
+                            || android.os.SystemClock.elapsedRealtime() >= deadline) return null;
+                    int count = input.read(buffer);
+                    if (count == -1) break;
+                    if (destroyed || generation != cacheGeneration
+                            || android.os.SystemClock.elapsedRealtime() >= deadline) return null;
+                    cache.write(download, output, buffer, count);
+                }
+                output.flush();
+            }
+            if (destroyed || generation != cacheGeneration || download.cancelled
+                    || (expectedBytes >= 0 && download.bytes != expectedBytes)) return null;
+            return cache.complete(download) ? download.target : null;
+        } catch (Exception ignored) {
+            // Best-effort cache: streams still play. Never log URL-bearing exceptions.
+            return null;
+        } finally {
+            if (connection != null) {
+                cacheConnections.remove(connection);
+                connection.disconnect();
+            }
+            if (download != null) cache.finish(download);
+        }
+    }
+
+    private synchronized void cancelCacheWork() {
+        cacheGeneration++;
+        if (delayedCacheDownload != null) {
+            mainHandler.removeCallbacks(delayedCacheDownload);
+            delayedCacheDownload = null;
+        }
+        if (cacheStore != null) cacheStore.cancelDownloads();
+        for (HttpURLConnection connection : cacheConnections) connection.disconnect();
+        if (downloadExecutor instanceof ThreadPoolExecutor) {
+            ((ThreadPoolExecutor) downloadExecutor).getQueue().clear();
+        }
+        if (artworkExecutor instanceof ThreadPoolExecutor) {
+            ((ThreadPoolExecutor) artworkExecutor).getQueue().clear();
+        }
+        downloading.clear();
+    }
+
+    public void clearCachedFiles() {
+        cancelCacheWork();
+        cacheStore.clear();
     }
 
     /**
@@ -844,7 +1148,9 @@ public class PlaybackService extends MediaSessionService {
      * playStream() automatically serves this item from disk.
      */
     public void downloadFileToCache(final String rawUrl, final String itemId) {
-        if (rawUrl == null || rawUrl.isEmpty() || itemId == null || itemId.isEmpty()) return;
+        ExecutorService executor = downloadExecutor;
+        if (destroyed || executor == null || rawUrl == null || rawUrl.isEmpty()
+                || itemId == null || !itemId.matches("[A-Za-z0-9_-]+")) return;
         if (getCachedFile(itemId) != null) return;
         if (downloading.putIfAbsent(itemId, Boolean.TRUE) != null) return;
         // Always fetch the FULL track from position 0, regardless of
@@ -854,54 +1160,22 @@ public class PlaybackService extends MediaSessionService {
         // it — a partial download starting wherever a seek landed would
         // silently corrupt every future seek into this item.
         final String url = stripStartTimeTicks(rawUrl);
-        downloadExecutor.submit(() -> {
-            HttpURLConnection conn = null;
-            InputStream in = null;
-            FileOutputStream out = null;
-            try {
-                conn = (HttpURLConnection) new URL(url).openConnection();
-                conn.setRequestProperty("User-Agent", "C.R.A.T.E./1.0");
-                conn.setConnectTimeout(15000);
-                conn.setReadTimeout(30000);
-                conn.setInstanceFollowRedirects(true);
-                if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) return;
-                in = conn.getInputStream();
-                File target = new File(fileCacheDir, itemId + ".audio");
-                File tmp = new File(fileCacheDir, itemId + ".audio.tmp");
-                out = new FileOutputStream(tmp);
-                byte[] buffer = new byte[64 * 1024];
-                int bytesRead;
-                long total = 0;
-                while ((bytesRead = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, bytesRead);
-                    total += bytesRead;
-                }
-                out.flush();
-                out.close();
-                out = null;
-                if (total > 0) {
-                    if (target.exists()) target.delete();
-                    if (!tmp.renameTo(target)) {
-                        java.nio.file.Files.copy(tmp.toPath(), target.toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                        tmp.delete();
+        final long generation = cacheGeneration;
+        try {
+            executor.submit(() -> {
+                try {
+                    File cached = downloadBounded(cacheStore.audio, itemId + ".audio", url,
+                        15_000, 30_000, 180_000L, NativeCacheStore.MAX_AUDIO_FILE_BYTES, generation);
+                    if (cached != null && !destroyed && generation == cacheGeneration) {
+                        MediaBridgePlugin.emitCacheReady(itemId);
                     }
-                    // Tell the web layer this item is now on disk (the
-                    // currently-playing item keeps streaming — this only
-                    // means the NEXT load/seek of it is instant).
-                    MediaBridgePlugin.emitCacheReady(itemId);
-                } else {
-                    tmp.delete();
+                } finally {
+                    downloading.remove(itemId);
                 }
-            } catch (Exception ignored) {
-                // Best-effort: streaming still works without the cache.
-            } finally {
-                downloading.remove(itemId);
-                try { if (in != null) in.close(); } catch (Exception ignored2) {}
-                try { if (out != null) out.close(); } catch (Exception ignored2) {}
-                if (conn != null) conn.disconnect();
-            }
-        });
+            });
+        } catch (RejectedExecutionException ignored) {
+            downloading.remove(itemId);
+        }
     }
 
     public void getStateAsync(StateCallback callback) {
@@ -933,6 +1207,11 @@ public class PlaybackService extends MediaSessionService {
     /** Only called from Player.Listener callbacks (main thread). */
     private void emitState() {
         if (player == null) return;
+        if (usesNativeSession()) {
+            sessionReporter.state(nativeIsPlaying(), nativeWantsPlaying(), nativePositionMs(), currentSourceIsTranscode);
+            playbackCoordinator.stateChanged();
+            return;
+        }
         MediaBridgePlugin.emitState(
             player.isPlaying(),
             player.getCurrentPosition(),
@@ -941,4 +1220,64 @@ public class PlaybackService extends MediaSessionService {
             player.getPlaybackState() == Player.STATE_BUFFERING
         );
     }
+
+    private void publishPlaybackError(String message) {
+        if (usesNativeSession()) {
+            sessionReporter.stop(nativePositionMs());
+            playbackCoordinator.failed(message);
+        }
+        else MediaBridgePlugin.emitError(message);
+    }
+
+    @Override public void nativeLoad(PlaybackQueueState.Track track, String quality, long positionMs,
+                                     boolean playing, boolean bypassCache) {
+        sessionReporter.prepare(track, nativePositionMs());
+        long request = PlaybackRequestGate.SHARED.beginPlay();
+        PlaybackRequestGate.SHARED.setDesiredPlaying(playing);
+        String url = quality.equals("low") ? PlaybackQueueState.lowUrlAtPosition(track.lowUrl, positionMs)
+            : PlaybackQueueState.newPlaySessionUrl(track.highUrl);
+        playStream(url, positionMs, track.title, track.artist, track.artUrl, track.durationMs,
+            quality.equals("low"), bypassCache, request);
+    }
+    @Override public void nativePause() {
+        PlaybackRequestGate.SHARED.setDesiredPlaying(false);
+        if (player != null) player.pause();
+    }
+    @Override public void nativeResume() {
+        PlaybackRequestGate.SHARED.setDesiredPlaying(true);
+        if (player != null) player.play();
+    }
+    @Override public void nativeSeekInPlace(long positionMs) {
+        clearStartEnforcer();
+        PlaybackRequestGate.SHARED.requestSeek(positionMs);
+        if (player != null) player.seekTo(positionMs);
+        sessionReporter.progress(positionMs, !nativeWantsPlaying(), true);
+    }
+    @Override public void nativeStop() {
+        if (sessionReporter != null) sessionReporter.stop(nativePositionMs());
+        PlaybackRequestGate.SHARED.stop();
+        clearStartEnforcer();
+        stopPositionEmitter();
+        if (player != null) { player.stop(); player.clearMediaItems(); }
+        currentItemId = null;
+        currentPlaybackRequest = -1L;
+        currentItemIsLocal = false;
+        currentSourceIsTranscode = false;
+        streamStartOffsetMs = 0L;
+        currentCachedAudioName = null;
+        currentCachedArtworkName = null;
+        cacheStore.audio.retainPin(null);
+        cacheStore.artwork.retainPin(null);
+    }
+    @Override public boolean nativeHasMedia() { return player != null && player.getCurrentMediaItem() != null; }
+    @Override public boolean nativeIsPlaying() { return player != null && player.isPlaying(); }
+    @Override public boolean nativeWantsPlaying() { return PlaybackRequestGate.SHARED.shouldPlay(currentPlaybackRequest); }
+    @Override public boolean nativeIsBuffering() { return player != null && player.getPlaybackState() == Player.STATE_BUFFERING; }
+    @Override public boolean nativeIsLocal() { return currentItemIsLocal; }
+    @Override public boolean nativeIsCached() { return currentItemId != null && getCachedFile(currentItemId) != null; }
+    @Override public long nativePositionMs() {
+        return player == null ? 0L : Math.max(0L, player.getCurrentPosition()) + (currentSourceIsTranscode ? streamStartOffsetMs : 0L);
+    }
+    @Override public long nativeDurationMs() { return player == null ? 0L : reportedDurationMs(); }
+    @Override public long nativeRequestId() { return PlaybackRequestGate.SHARED.currentSequence(); }
 }

@@ -1,6 +1,7 @@
 package com.yourname.crate;
 
 import com.getcapacitor.JSObject;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
@@ -39,6 +40,72 @@ public class MediaBridgePlugin extends Plugin {
 
     // ===== JS -> Native commands =====
 
+    private interface CoordinatorCommand { JSObject run(NativePlaybackCoordinator coordinator); }
+
+    private void withCoordinator(PluginCall call, CoordinatorCommand command) {
+        PlaybackService.whenReady(getContext(), service -> {
+            try { call.resolve(command.run(service.coordinator())); }
+            catch (IllegalStateException error) {
+                if ("stale_revision".equals(error.getMessage())) {
+                    call.reject("The queue changed. Refresh it before editing.", "stale_revision");
+                } else call.reject("Playback state is unavailable. Please retry.", "native_playback");
+            } catch (IllegalArgumentException error) {
+                // Validators only use fixed messages; never include a rejected descriptor/URL.
+                call.reject(error.getMessage(), "invalid_playback_request");
+            } catch (Exception ignored) {
+                call.reject("The playback request could not be applied.", "native_playback");
+            }
+        }, () -> call.reject("Playback service did not become ready. Please retry.", "native_unavailable"));
+    }
+
+    @PluginMethod public void configurePlayback(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.configure(call.getString("scope")));
+    }
+    @PluginMethod public void openNativeLibrary(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            try {
+                getActivity().startActivity(new android.content.Intent(getActivity(), NativeLibraryActivity.class));
+                call.resolve();
+            } catch (Exception ignored) {
+                call.reject("Could not open the native interface.", "native_unavailable");
+            }
+        });
+    }
+    @PluginMethod public void getPlaybackSnapshot(PluginCall call) {
+        withCoordinator(call, NativePlaybackCoordinator::snapshot);
+    }
+    @PluginMethod public void playSelection(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.playSelection(call.getData()));
+    }
+    @PluginMethod public void replaceQueue(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.replaceQueue(call.getData()));
+    }
+    @PluginMethod public void mutateQueue(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.mutateQueue(call.getData()));
+    }
+    @PluginMethod public void playQueueItem(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.playQueueItem(call.getData()));
+    }
+    @PluginMethod public void setPlaybackOptions(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.setOptions(call.getData()));
+    }
+    @PluginMethod public void setSleepTimer(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.setSleep(call.getData()));
+    }
+    @PluginMethod public void nextTrack(PluginCall call) {
+        withCoordinator(call, NativePlaybackCoordinator::nextTrack);
+    }
+    @PluginMethod public void previousTrack(PluginCall call) {
+        withCoordinator(call, NativePlaybackCoordinator::previousTrack);
+    }
+    @PluginMethod public void seekAbsolute(PluginCall call) {
+        withCoordinator(call, coordinator -> coordinator.seekAbsolute(numberArg(call, "positionMs", 0L),
+            call.getData().has("playWhenReady") ? call.getBoolean("playWhenReady", Boolean.FALSE) : null));
+    }
+    @PluginMethod public void retryPlayback(PluginCall call) {
+        withCoordinator(call, NativePlaybackCoordinator::retry);
+    }
+
     @PluginMethod
     public void playStream(PluginCall call) {
         String url = call.getString("url");
@@ -56,11 +123,15 @@ public class MediaBridgePlugin extends Plugin {
         // preset (small Opus files). Lossless FLAC streams are too large
         // to mirror on disk and are never downloaded.
         boolean allowCache = call.getBoolean("cache", Boolean.TRUE);
+        // Retry may skip a problematic cached file without changing LQ seek semantics.
+        boolean bypassCache = call.getBoolean("bypassCache", Boolean.FALSE);
 
         if (url == null || url.isEmpty()) {
             call.reject("url is required");
             return;
         }
+        // Capture order at arrival, not when a delayed service-start callback runs.
+        final long requestSequence = PlaybackRequestGate.SHARED.beginPlay();
         PlaybackService service = PlaybackService.getInstance();
         if (service == null) {
             // Cold-start race: the WebView can be interactive before
@@ -76,18 +147,29 @@ public class MediaBridgePlugin extends Plugin {
             final String fArt = artUrl;
             final long fDur = durationMs;
             final boolean fCache = allowCache;
+            final boolean fBypassCache = bypassCache;
             android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
             main.post(() -> {
+                if (!PlaybackRequestGate.SHARED.isCurrent(requestSequence)) {
+                    call.resolve();
+                    return;
+                }
                 PlaybackService s1 = PlaybackService.getInstance();
                 if (s1 != null) {
-                    s1.playStream(fUrl, fStart, fTitle, fArtist, fArt, fDur, fCache);
+                    s1.playStream(fUrl, fStart, fTitle, fArtist, fArt, fDur, fCache, fBypassCache,
+                        requestSequence);
                     call.resolve();
                     return;
                 }
                 main.postDelayed(() -> {
+                    if (!PlaybackRequestGate.SHARED.isCurrent(requestSequence)) {
+                        call.resolve();
+                        return;
+                    }
                     PlaybackService s2 = PlaybackService.getInstance();
                     if (s2 != null) {
-                        s2.playStream(fUrl, fStart, fTitle, fArtist, fArt, fDur, fCache);
+                        s2.playStream(fUrl, fStart, fTitle, fArtist, fArt, fDur, fCache, fBypassCache,
+                            requestSequence);
                         call.resolve();
                     } else {
                         call.reject("PlaybackService failed to start");
@@ -96,37 +178,58 @@ public class MediaBridgePlugin extends Plugin {
             });
             return;
         }
-        service.playStream(url, startPositionMs, title, artist, artUrl, durationMs, allowCache);
+        service.playStream(url, startPositionMs, title, artist, artUrl, durationMs, allowCache,
+            bypassCache, requestSequence);
         call.resolve();
     }
 
     @PluginMethod
     public void pause(PluginCall call) {
-        PlaybackService service = PlaybackService.getInstance();
-        if (service != null) service.pause();
-        call.resolve();
+        transport(call, "pause");
     }
 
     @PluginMethod
     public void resume(PluginCall call) {
-        PlaybackService service = PlaybackService.getInstance();
-        if (service != null) service.resume();
-        call.resolve();
+        transport(call, "resume");
     }
 
     @PluginMethod
     public void seek(PluginCall call) {
         long positionMs = numberArg(call, "positionMs", 0L);
+        long requestSequence = PlaybackRequestGate.SHARED.requestSeek(positionMs);
         PlaybackService service = PlaybackService.getInstance();
-        if (service != null) service.seek(positionMs);
+        if (service != null) service.seek(positionMs, requestSequence);
         call.resolve();
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        PlaybackService service = PlaybackService.getInstance();
-        if (service != null) service.stop();
-        call.resolve();
+        transport(call, "stop");
+    }
+
+    /** Resolve after the main-thread operation, including after service recreation. */
+    private void transport(PluginCall call, String action) {
+        PlaybackService.whenReady(getContext(), service -> {
+            try {
+                NativePlaybackCoordinator coordinator = service.coordinator();
+                if (coordinator.isActive()) {
+                    if (action.equals("pause")) coordinator.pause();
+                    else if (action.equals("resume")) coordinator.resume();
+                    else coordinator.stop();
+                    call.resolve(coordinator.snapshot());
+                } else {
+                    // Compatibility with the original playStream protocol.
+                    if (action.equals("stop")) service.stop(PlaybackRequestGate.SHARED.stop());
+                    else {
+                        PlaybackRequestGate.SHARED.setDesiredPlaying(action.equals("resume"));
+                        if (action.equals("resume")) service.resume(); else service.pause();
+                    }
+                    call.resolve();
+                }
+            } catch (Exception ignored) {
+                call.reject("The playback request could not be applied.", "native_playback");
+            }
+        }, () -> call.reject("Playback service did not become ready. Please retry.", "native_unavailable"));
     }
 
     @PluginMethod
@@ -180,6 +283,45 @@ public class MediaBridgePlugin extends Plugin {
         call.resolve(ret);
     }
 
+    @PluginMethod
+    public void getDownloadedTracks(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("itemIds", new JSArray(NativeCacheStore.get(getContext()).audio.completedIds()));
+        call.resolve(result);
+    }
+
+    /** Size includes temporary in-flight bytes; never includes URLs or credentials. */
+    @PluginMethod
+    public void getCacheStats(PluginCall call) {
+        call.resolve(NativeCacheStore.get(getContext()).stats());
+    }
+
+    @PluginMethod
+    public void setCacheLimit(PluginCall call) {
+        Object value = call.getData().opt("audioLimitBytes");
+        long bytes = numberArg(call, "audioLimitBytes", -1L);
+        if (!(value instanceof Number) || ((Number) value).doubleValue() != bytes
+                || !NativeCacheStore.isAllowedAudioLimit(bytes)) {
+            call.reject("Choose an audio cache limit of 128, 256, 512 or 1024 MiB");
+            return;
+        }
+        NativeCacheStore store = NativeCacheStore.get(getContext());
+        store.setAudioLimit(bytes);
+        notifyListeners("cacheChanged", new JSObject());
+        call.resolve(store.stats());
+    }
+
+    /** Current playback files remain pinned; cancelled temporary files finish cleanup shortly. */
+    @PluginMethod
+    public void clearCache(PluginCall call) {
+        NativeCacheStore store = NativeCacheStore.get(getContext());
+        PlaybackService service = PlaybackService.getInstance();
+        if (service != null) service.clearCachedFiles();
+        else store.clear();
+        notifyListeners("cacheChanged", new JSObject());
+        call.resolve(store.stats());
+    }
+
     /**
      * Returns whether POST_NOTIFICATIONS is granted. On Android 13+ with
      * targetSdk 33+, SystemUI builds the quick-settings media carousel
@@ -206,6 +348,7 @@ public class MediaBridgePlugin extends Plugin {
      */
     @PluginMethod
     public void updateNowPlaying(PluginCall call) {
+        String itemId = call.getString("itemId", null);
         String title = call.getString("title", "");
         String artist = call.getString("artist", "");
         String artUrl = call.getString("artUrl", null);
@@ -215,7 +358,7 @@ public class MediaBridgePlugin extends Plugin {
             call.resolve();
             return;
         }
-        service.updateNowPlaying(title, artist, artUrl, durationMs);
+        service.updateNowPlaying(title, artist, artUrl, durationMs, itemId);
         call.resolve();
     }
 
@@ -256,6 +399,14 @@ public class MediaBridgePlugin extends Plugin {
     }
 
     // ===== Native -> JS events =====
+
+    public static void emitPlaybackSnapshot(JSObject snapshot) {
+        if (instance != null) instance.notifyListeners("playbackSnapshot", snapshot);
+    }
+
+    public static void emitPlaybackPosition(JSObject position) {
+        if (instance != null) instance.notifyListeners("playbackPosition", position);
+    }
 
     public static void emitState(boolean isPlaying, long positionMs, long durationMs,
                                  boolean isLocal, boolean isBuffering) {

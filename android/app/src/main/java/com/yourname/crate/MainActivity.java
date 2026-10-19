@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
@@ -18,6 +19,25 @@ public class MainActivity extends BridgeActivity {
         // bridge picks it up on first load.
         registerPlugin(MediaBridgePlugin.class);
         super.onCreate(savedInstanceState);
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (bridge == null || bridge.getWebView() == null) {
+                    moveTaskToBack(true);
+                    return;
+                }
+                // Views are Preact state, not WebView URLs. Dispatch synchronously
+                // in JS so Android knows whether a panel or view consumed Back.
+                bridge.getWebView().evaluateJavascript(
+                    "!window.dispatchEvent(new Event('crate:back', {cancelable:true}))",
+                    handled -> {
+                        if (!isFinishing() && !isDestroyed() && !"true".equals(handled)) {
+                            moveTaskToBack(true);
+                        }
+                    });
+            }
+        });
 
         requestNotificationPermissionIfNeeded();
 
