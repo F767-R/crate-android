@@ -1,5 +1,6 @@
 import { extractLyricsFromFlac } from './flacLyrics.js';
 import { normalizeLyricsPayload } from './lrcParser.js';
+import { fetchWithTimeout } from './request.js';
 
 export const LYRICS_AUDIO_RANGE = 'bytes=0-131071';
 const LYRICS_PREFIX_BYTES = 131072;
@@ -23,17 +24,22 @@ function parseEndpointText(text) {
   return hasLyrics(trimmed) ? trimmed : null;
 }
 
-async function readResponsePrefix(response, maximumBytes = LYRICS_PREFIX_BYTES) {
+async function readResponsePrefix(response, maximumBytes = LYRICS_PREFIX_BYTES, signal) {
+  if (signal?.aborted) return new ArrayBuffer(0);
   if (!response.body?.getReader) {
     const buffer = await response.arrayBuffer();
     return buffer.slice(0, maximumBytes);
   }
 
   const reader = response.body.getReader();
+  const onAbort = () => {
+    try { Promise.resolve(reader.cancel()).catch(() => {}); } catch (_) {}
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   const chunks = [];
   let total = 0;
   try {
-    while (total < maximumBytes) {
+    while (total < maximumBytes && !signal?.aborted) {
       const { done, value } = await reader.read();
       if (done) break;
       const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
@@ -44,11 +50,14 @@ async function readResponsePrefix(response, maximumBytes = LYRICS_PREFIX_BYTES) 
       if (chunk.byteLength < bytes.byteLength) break;
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     if (total >= maximumBytes) {
       try { await reader.cancel(); } catch (_) {}
     }
     try { reader.releaseLock(); } catch (_) {}
   }
+
+  if (signal?.aborted) return new ArrayBuffer(0);
 
   const combined = new Uint8Array(total);
   let offset = 0;
@@ -66,25 +75,40 @@ export async function fetchLyricsFromMultipleSources({
   transcodedFlacUrl,
   headers = {},
   signal,
+  timeoutMs = 15000,
+  source = 'auto',
+  tag = '',
 }) {
-  try {
-    const response = await fetchImpl(endpointUrl, { headers, signal });
-    if (response.ok) {
-      const payload = parseEndpointText(await response.text());
-      if (payload) return payload;
-    }
+  if (signal?.aborted) return null;
+  if (source !== 'embedded') try {
+    const payload = await fetchWithTimeout(endpointUrl, { headers, signal }, {
+      fetchImpl,
+      timeoutMs,
+      consume: async response => response.ok ? parseEndpointText(await response.text()) : null,
+    });
+    if (payload && !signal?.aborted) return payload;
   } catch (_) {}
+  if (source === 'jellyfin') return null;
 
-  for (const url of [originalAudioUrl, transcodedFlacUrl]) {
+  for (const url of source === 'embedded' ? [originalAudioUrl] : [originalAudioUrl, transcodedFlacUrl]) {
     if (!url || signal?.aborted) break;
     try {
-      const response = await fetchImpl(url, {
+      let sourceSignal;
+      const lyrics = await fetchWithTimeout(url, {
         headers: { ...headers, Range: LYRICS_AUDIO_RANGE },
         signal,
+      }, {
+        timeoutMs,
+        fetchImpl: (input, options) => {
+          sourceSignal = options.signal;
+          return fetchImpl(input, options);
+        },
+        consume: async response => {
+          if (!response.ok && response.status !== 206) return null;
+          return extractLyricsFromFlac(await readResponsePrefix(response, LYRICS_PREFIX_BYTES, sourceSignal), tag);
+        },
       });
-      if (!response.ok && response.status !== 206) continue;
-      const lyrics = extractLyricsFromFlac(await readResponsePrefix(response));
-      if (lyrics) return lyrics;
+      if (lyrics && !signal?.aborted) return lyrics;
     } catch (_) {}
   }
 

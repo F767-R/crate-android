@@ -5,6 +5,7 @@ import {
   playbackDuration,
   playbackIsLocal,
   playbackPosition,
+  playbackQuality,
   playbackStartOffset,
   playbackTrackId,
   setPlaybackState,
@@ -22,6 +23,8 @@ import {
 } from './nativeBridge.js';
 import { getAlbumArtUrl } from './api.js';
 import { translatedTrackText } from './metadata.js';
+import { beginPlaybackCommand, isPlaybackCommandCurrent } from './playbackCommands.js';
+import { isNativePlayback, nativePlaybackCommand } from './nativePlayback.js';
 
 let initialized = false;
 
@@ -31,9 +34,16 @@ function emit(listeners, event, payload = {}) {
     try {
       callback(value);
     } catch (error) {
-      console.error(`[player] ${event} listener failed`, error);
+      console.error(`[player] ${event} listener failed`);
     }
   }
+}
+
+function publishCommandFailure(error, command) {
+  if (!isPlaybackCommandCurrent(command)) return;
+  audioShim.paused = true;
+  setPlaybackState({ playing: false, buffering: false, error });
+  emit(audioShim._listeners, 'error', { error });
 }
 
 export const audioShim = {
@@ -70,9 +80,10 @@ export const audioShim = {
   },
 
   async play(opts = {}) {
+    const command = opts.command ?? beginPlaybackCommand();
     const track = playbackCurrentTrack.value;
     const url = opts.url ?? this.src;
-    if (!track || !url) return;
+    if (!track || !url || !isPlaybackCommandCurrent(command)) return false;
 
     const startPositionMs = opts.startPositionMs ?? Math.round(playbackPosition.value * 1000);
     const cache = opts.cache ?? qualityPreset.value === 'low';
@@ -92,37 +103,60 @@ export const audioShim = {
         artUrl: track.AlbumId ? getAlbumArtUrl(track.AlbumId, 400) : null,
         durationMs: Math.round((track.RunTimeTicks || 0) / 10000),
         cache,
+        bypassCache: opts.bypassCache === true,
       });
+      return isPlaybackCommandCurrent(command);
     } catch (error) {
-      this.paused = true;
-      setPlaybackState({ playing: false, buffering: false, error });
-      emit(this._listeners, 'error', { error });
+      if (!isPlaybackCommandCurrent(command)) return false;
+      publishCommandFailure(error, command);
       throw error;
     }
   },
 
-  async pause() {
-    if (this.paused) return;
+  async pause({ command = beginPlaybackCommand() } = {}) {
+    if (isNativePlayback()) return nativePlaybackCommand('pause');
+    if (!isPlaybackCommandCurrent(command)) return false;
     this.paused = true;
     setPlaybackState({ playing: false });
     emit(this._listeners, 'pause');
-    return nativePause();
+    try {
+      await nativePause();
+      return isPlaybackCommandCurrent(command);
+    } catch (error) {
+      publishCommandFailure(error, command);
+      return false;
+    }
   },
 
-  async resume() {
-    if (!playbackCurrentTrack.value || !this.paused) return;
+  async resume({ command = beginPlaybackCommand() } = {}) {
+    if (isNativePlayback()) return nativePlaybackCommand('resume');
+    if (!playbackCurrentTrack.value || !isPlaybackCommandCurrent(command)) return false;
     this.paused = false;
     setPlaybackState({ playing: true });
     emit(this._listeners, 'play');
-    return nativeResume();
+    try {
+      await nativeResume();
+      return isPlaybackCommandCurrent(command);
+    } catch (error) {
+      publishCommandFailure(error, command);
+      return false;
+    }
   },
 
-  async seek(time) {
+  async seek(time, { command = beginPlaybackCommand() } = {}) {
+    if (isNativePlayback()) return nativePlaybackCommand('seekAbsolute', { positionMs: Math.round(Math.max(0, Number(time) || 0) * 1000) });
+    if (!isPlaybackCommandCurrent(command)) return false;
     const safeTime = Math.max(0, Number(time) || 0);
     this.currentTime = safeTime;
     setPlaybackState({ position: safeTime });
     emit(this._listeners, 'timeupdate');
-    return nativeSeek(Math.round(safeTime * 1000));
+    try {
+      await nativeSeek(Math.round(safeTime * 1000));
+      return isPlaybackCommandCurrent(command);
+    } catch (error) {
+      publishCommandFailure(error, command);
+      return false;
+    }
   },
 
   setVolume(volume) {
@@ -136,6 +170,7 @@ export const audioShim = {
     if (!track) return;
     const text = translatedTrackText(track, isTranslated.value, trackTranslationCache.value);
     return nativeUpdateNowPlaying({
+      itemId: track.Id,
       title: text.title,
       artist: text.artist,
       artUrl: track.AlbumId ? getAlbumArtUrl(track.AlbumId, 400) : null,
@@ -163,11 +198,12 @@ export function initPlayerShim() {
   initialized = true;
 
   addNativeListener('stateChanged', data => {
+    if (isNativePlayback()) return;
     const wasPaused = audioShim.paused;
     const wasBuffering = playbackBuffering.value;
     const rawPosition = Math.max(0, (Number(data?.position) || 0) / 1000);
     const isLocal = data?.isLocal === true;
-    const position = (isLocal || qualityPreset.value === 'high')
+    const position = (isLocal || playbackQuality.value === 'high')
       ? rawPosition
       : playbackStartOffset.value + rawPosition;
     const duration = Number(data?.duration) > 0
@@ -201,18 +237,20 @@ export function initPlayerShim() {
   // The Android plugin emits sessionSeek with positionMs. Network
   // transcodes need the controller's URL-restart seek path.
   addNativeListener('sessionSeek', data => {
+    if (isNativePlayback()) return;
     emit(audioShim._listeners, 'sessionseek', {
       position: Math.max(0, (Number(data?.positionMs) || 0) / 1000),
     });
   });
 
   addNativeListener('trackEnded', () => {
+    if (isNativePlayback()) return;
     audioShim.paused = true;
     setPlaybackState({ playing: false, buffering: false });
     emit(audioShim._listeners, 'ended');
   });
-  addNativeListener('next', () => emit(audioShim._listeners, 'next'));
-  addNativeListener('prev', () => emit(audioShim._listeners, 'previous'));
+  addNativeListener('next', () => { if (!isNativePlayback()) emit(audioShim._listeners, 'next'); });
+  addNativeListener('prev', () => { if (!isNativePlayback()) emit(audioShim._listeners, 'previous'); });
   addNativeListener('cacheReady', data => {
     if (data?.itemId && data.itemId === playbackTrackId.value) {
       setPlaybackState({ itemCached: true });
@@ -220,8 +258,10 @@ export function initPlayerShim() {
     emit(audioShim._listeners, 'cacheready', { itemId: data?.itemId });
   });
   addNativeListener('error', data => {
+    if (isNativePlayback()) return;
     const error = new Error(data?.message || 'Native playback error');
-    setPlaybackState({ error, buffering: false });
+    audioShim.paused = true;
+    setPlaybackState({ error, playing: false, buffering: false });
     emit(audioShim._listeners, 'error', { error });
   });
 }

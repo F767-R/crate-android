@@ -1,17 +1,16 @@
 import { h } from 'preact';
-import { useEffect, useLayoutEffect, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect } from 'preact/hooks';
 import {
   albumGridScrollTop,
   albumTranslationCache,
   isTranslated,
 } from '../stores/state.js';
-import { cachedImageUrl } from '../utils/api.js';
+import { downloadedOnly } from '../stores/offline.js';
+import Artwork from './Artwork.jsx';
 import { translatedAlbumText } from '../utils/metadata.js';
 import { navigateToView } from '../utils/navigation.js';
 
 export default function AlbumGrid({ albums, centerAlbumId = null, centerRequestId = 0 }) {
-  const [loadedImages, setLoadedImages] = useState(() => new Map());
-
   const handleAlbumClick = (album) => {
     const main = document.getElementById('main');
     if (main) albumGridScrollTop.value = main.scrollTop;
@@ -61,24 +60,13 @@ export default function AlbumGrid({ albums, centerAlbumId = null, centerRequestI
     };
   }, []);
 
-  useEffect(() => {
-    if (!albums) return;
-    albums.forEach(album => {
-      if (album.ImageTags?.Primary) {
-        cachedImageUrl(album.Id, 'primary').then(url => {
-          setLoadedImages(prev => new Map(prev).set(album.Id, url));
-        });
-      }
-    });
-  }, [albums]);
-
   if (!albums || albums.length === 0) {
-    return <div class="status-msg">No albums found</div>;
+    return <div class="status-msg">{downloadedOnly.value ? "No downloaded tracks in this library yet. Play music in LQ while connected to save audio automatically." : "No albums found"}</div>;
   }
 
   return (
     <div class="album-grid">
-      {albums.map((album, idx) => {
+      {albums.map(album => {
         const display = translatedAlbumText(album, isTranslated.value, albumTranslationCache.value);
         return (
         <div
@@ -92,11 +80,10 @@ export default function AlbumGrid({ albums, centerAlbumId = null, centerRequestI
         >
           <div class="art-wrap">
             {album.ImageTags?.Primary ? (
-              <img
+              <Artwork
+                itemId={album.Id}
+                imageTag={album.ImageTags.Primary}
                 data-art-id={album.Id}
-                src={loadedImages.get(album.Id) || ''}
-                {...(idx < 6 ? { fetchpriority: "high" } : { loading: "lazy" })}
-                decoding="async"
                 alt=""
               />
             ) : <div class="art-fallback">♪</div>}

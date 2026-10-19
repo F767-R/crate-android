@@ -13,6 +13,7 @@ import {
   playbackPlaying
 } from '../stores/state.js';
 import { audioShim } from '../utils/playerShim.js';
+import { isNativePlayback, nativePlaybackCommand } from '../utils/nativePlayback.js';
 
 export default function SleepPanel() {
   const [toast, setToast] = useState({ show: false, message: '' });
@@ -25,6 +26,7 @@ export default function SleepPanel() {
   }, []);
 
   function loadSleepState() {
+    if (isNativePlayback()) return;
     try {
       const saved = localStorage.getItem('crateSleepTimer');
       if (!saved) return;
@@ -140,7 +142,18 @@ export default function SleepPanel() {
     showToast('Sleep timer cancelled');
   }
 
-  function setSleepTimer(minutes, mode) {
+  async function setSleepTimer(minutes, mode) {
+    if (isNativePlayback()) {
+      const nextMode = mode || (minutes > 0 ? 'duration' : null);
+      const applied = await nativePlaybackCommand('setSleepTimer', {
+        mode: nextMode, endTimeMs: nextMode === 'duration' ? Date.now() + minutes * 60000 : 0,
+      });
+      if (!applied) return;
+      sleepDurationMinutes.value = minutes;
+      sleepPanelVisible.value = false;
+      showToast(!nextMode ? 'Sleep timer cancelled' : nextMode === 'duration' ? `Sleep timer set for ${minutes} minutes` : `Sleep at end of ${nextMode}`, 2500);
+      return;
+    }
     if (minutes === 0 && !mode) {
       cancelSleepTimer();
       sleepPanelVisible.value = false;

@@ -5,11 +5,11 @@ import {
   playbackCurrentTrack,
   queue,
   queueVisible,
-  saveQueue,
   trackTranslationCache,
 } from '../stores/state.js';
 import { armClickSuppression } from '../utils/clickSuppression.js';
-import { playNextFromQueue } from '../utils/playbackControls.js';
+import { playNextFromQueue, removeQueuedTrack, clearQueuedTracks, moveQueuedTrack } from '../utils/playbackControls.js';
+import { getNativePlaybackRevision } from '../utils/nativePlayback.js';
 import { translatedTrackText } from '../utils/metadata.js';
 
 export default function QueuePanel() {
@@ -25,15 +25,8 @@ export default function QueuePanel() {
     suppressClick: false,
   });
 
-  const removeFromQueue = index => {
-    queue.value = queue.value.filter((_, itemIndex) => itemIndex !== index);
-    saveQueue();
-  };
-
-  const clearQueue = () => {
-    queue.value = [];
-    saveQueue();
-  };
+  const removeFromQueue = index => removeQueuedTrack(index);
+  const clearQueue = () => clearQueuedTracks();
 
   const startDrag = (event, index) => {
     event.preventDefault();
@@ -45,6 +38,8 @@ export default function QueuePanel() {
       targetIndex: index,
       startY: event.clientY,
       suppressClick: false,
+      revision: getNativePlaybackRevision(),
+      queueSnapshot: queue.value,
     };
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch (_) {}
   };
@@ -92,13 +87,9 @@ export default function QueuePanel() {
       }
 
       if (drag.dragging && drag.sourceIndex !== drag.targetIndex) {
-        const reordered = [...queue.value];
-        const [item] = reordered.splice(drag.sourceIndex, 1);
-        if (item) {
-          reordered.splice(drag.targetIndex, 0, item);
-          queue.value = reordered;
-          saveQueue();
-        }
+        // A native track transition can consume an entry during the gesture.
+        // Never apply old drag indices to the newly visible queue.
+        if (drag.queueSnapshot === queue.value) moveQueuedTrack(drag.sourceIndex, drag.targetIndex, drag.revision);
       }
 
       const suppressClick = drag.dragging;

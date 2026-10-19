@@ -1,46 +1,57 @@
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { albumTranslationCache, isTranslated, userId } from '../stores/state.js';
-import { getArtistAlbums, cachedImageUrl } from '../utils/api.js';
+import { libraryUsingSaved } from '../stores/offline.js';
+import { savedArtistAlbums, libraryGeneration } from '../utils/libraryData.js';
+import { filterDownloadedAlbums } from '../utils/downloads.js';
+import { getArtistAlbums } from '../utils/api.js';
+import Artwork from './Artwork.jsx';
 import { translatedAlbumText } from '../utils/metadata.js';
 import { navigateToView, showAlbumGrid } from '../utils/navigation.js';
+import { safeRequestError } from '../utils/request.js';
 
 export default function ArtistView({ artistId, name }) {
   const [albums, setAlbums] = useState([]);
-  const [loadedImages, setLoadedImages] = useState(new Map());
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
+  const requestUserId = userId.value;
+  const generation = libraryGeneration.value;
+  const visibleAlbums = filterDownloadedAlbums(albums);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     async function load() {
       setLoading(true);
+      setError('');
+      setAlbums([]);
       try {
-        const data = await getArtistAlbums(userId.value, artistId);
-        if (!cancelled) setAlbums(data.Items || []);
-      } catch (err) {
-        console.error('Failed to load artist albums:', err);
-        if (!cancelled) setAlbums([]);
+        let data;
+        const saved = savedArtistAlbums(artistId);
+        if (libraryUsingSaved.value && saved !== null) data = { Items: saved };
+        else {
+          try { data = await getArtistAlbums(requestUserId, artistId, { signal: controller.signal }); }
+          catch (error) {
+            if (controller.signal.aborted || saved === null || error?.status === 401 || error?.status === 403) throw error;
+            data = { Items: saved }; libraryUsingSaved.value = true;
+          }
+        }
+        if (!Array.isArray(data?.Items)) throw new Error('invalid artist response');
+        if (!controller.signal.aborted) setAlbums(data.Items);
+      } catch (error) {
+        if (!controller.signal.aborted) setError(safeRequestError(error, 'The artist albums could not be loaded. Please retry.'));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     if (artistId) load();
-    return () => { cancelled = true; };
-  }, [artistId]);
-
-  useEffect(() => {
-    albums.forEach((album, idx) => {
-      if (album.ImageTags?.Primary) {
-        cachedImageUrl(album.Id, 'primary').then(url => {
-          setLoadedImages(prev => new Map(prev).set(album.Id, url));
-        });
-      }
-    });
-  }, [albums]);
-
-  if (loading) {
-    return <div class="status-msg">Loading artist…</div>;
-  }
+    else {
+      setAlbums([]);
+      setLoading(false);
+      setError('No artist was selected. Return to the library to choose an artist.');
+    }
+    return () => controller.abort();
+  }, [artistId, requestUserId, retryCount, generation]);
 
   return (
     <div class="artist-view">
@@ -48,11 +59,18 @@ export default function ArtistView({ artistId, name }) {
         <button onClick={() => showAlbumGrid()}>← Library</button>
         <span> / {name || 'Artist'}</span>
       </div>
-      {albums.length === 0 ? (
+      {loading ? (
+        <div class="status-msg" role="status">Loading artist…</div>
+      ) : error ? (
+        <div class="status-msg" role="alert">
+          <p>{error}</p>
+          {artistId && <button onClick={() => setRetryCount(value => value + 1)}>Retry</button>}
+        </div>
+      ) : visibleAlbums.length === 0 ? (
         <div class="status-msg">No albums found for this artist.</div>
       ) : (
         <div class="album-grid">
-          {albums.map((album, idx) => {
+          {visibleAlbums.map(album => {
             const display = translatedAlbumText(album, isTranslated.value, albumTranslationCache.value);
             return (
             <div
@@ -65,11 +83,10 @@ export default function ArtistView({ artistId, name }) {
             >
               <div class="art-wrap">
                 {album.ImageTags?.Primary ? (
-                  <img
+                  <Artwork
+                    itemId={album.Id}
+                    imageTag={album.ImageTags.Primary}
                     data-art-id={album.Id}
-                    src={loadedImages.get(album.Id) || ''}
-                    {...(idx < 6 ? { fetchpriority: "high" } : { loading: "lazy" })}
-                    decoding="async"
                     alt=""
                   />
                 ) : <div class="art-fallback">♪</div>}

@@ -1,14 +1,14 @@
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
-  isTranslated,
   playbackCurrentTrack,
   trackTranslationCache,
   translationEditVisible,
 } from '../stores/state.js';
-import { config, DEEPL_API_URL, SOURCE_LANG, TARGET_LANG, GLOSSARY_ID } from '../config.js';
+import { getTranslationContext, getTranslationScope, saveTranslationOverride } from '../config.js';
 import { artistText } from '../utils/metadata.js';
-import { audioShim } from '../utils/playerShim.js';
+import { applySavedTranslationEdits } from '../utils/translationControls.js';
+import { safeTranslationError } from '../utils/translationClient.js';
 
 export default function TranslationEditPanel() {
   const [pending, setPending] = useState([]);
@@ -16,6 +16,8 @@ export default function TranslationEditPanel() {
   const [toast, setToast] = useState({ show: false, message: '', error: false });
   const firstInputRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const editSessionRef = useRef(null);
+  const savingRef = useRef(false);
   const visible = translationEditVisible.value;
   const track = playbackCurrentTrack.value;
 
@@ -27,15 +29,13 @@ export default function TranslationEditPanel() {
       return;
     }
 
+    editSessionRef.current = { track, context: getTranslationContext(), scope: getTranslationScope() };
     const translation = trackTranslationCache.value[track.Id] || {};
     const originalArtist = artistText(track, '');
     const fields = [{
       kind: 'title',
       original: track.Name || '',
       translated: translation.title || track.Name || '',
-      source_lang: SOURCE_LANG,
-      target_lang: TARGET_LANG,
-      glossary_id: GLOSSARY_ID || null,
       dirty: false,
     }];
     if (originalArtist) {
@@ -43,9 +43,6 @@ export default function TranslationEditPanel() {
         kind: 'artist',
         original: originalArtist,
         translated: translation.artist || originalArtist,
-        source_lang: SOURCE_LANG,
-        target_lang: TARGET_LANG,
-        glossary_id: GLOSSARY_ID || null,
         dirty: false,
       });
     }
@@ -56,75 +53,54 @@ export default function TranslationEditPanel() {
     });
   }, [visible, track?.Id]);
 
-  function overrideUrl() {
-    try {
-      const base = new URL(DEEPL_API_URL, config.SERVER);
-      base.pathname = base.pathname.replace(/\/translate\/?$/, '/translate/override');
-      return base.toString();
-    } catch (_) {
-      return DEEPL_API_URL.replace(/\/translate(\?.*)?(#.*)?$/, '/translate/override');
-    }
-  }
+  useEffect(() => () => clearTimeout(toastTimerRef.current), []);
 
   function close() {
     translationEditVisible.value = false;
   }
 
   async function save() {
+    if (savingRef.current) return;
+    const session = editSessionRef.current;
+    if (!session) return;
     const dirty = pending.filter(field =>
-      field.dirty && field.translated && field.translated !== field.original
+      field.dirty && field.translated?.trim()
     );
     if (!dirty.length) {
       close();
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
-    let failed = 0;
+    const saved = [];
+    let failure = null;
+    let persistenceWarning = null;
     for (const field of dirty) {
       try {
-        const response = await fetch(overrideUrl(), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            original: field.original,
-            translated: field.translated,
-            source_lang: field.source_lang,
-            target_lang: field.target_lang,
-            glossary_id: field.glossary_id,
-          }),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await saveTranslationOverride(field.original, field.translated, { context: session.context });
+        persistenceWarning = result.persistenceWarning;
+        saved.push(field);
       } catch (error) {
-        failed++;
-        console.error('[translation-edit] save failed', field.original, error);
+        failure = safeTranslationError(error);
       }
     }
+    savingRef.current = false;
     setSaving(false);
 
-    if (failed) {
-      showToast(`Failed to save ${failed} change(s)`, true);
-      return;
-    }
+    // Commit to the track and translation scope captured at Save, never a new song.
+    applySavedTranslationEdits(session, saved);
 
-    const activeTrack = playbackCurrentTrack.value;
-    if (activeTrack) {
-      const next = {
-        title: activeTrack.Name || '',
-        artist: artistText(activeTrack, ''),
-        ...(trackTranslationCache.value[activeTrack.Id] || {}),
-      };
-      for (const field of dirty) next[field.kind] = field.translated;
-      trackTranslationCache.value = {
-        ...trackTranslationCache.value,
-        [activeTrack.Id]: next,
-      };
-      isTranslated.value = true;
-      audioShim.updateMetadata();
+    if (editSessionRef.current === session) {
+      setPending(fields => fields.map(field => saved.some(value => value.kind === field.kind) ? { ...field, dirty: false } : field));
+      if (!failure) close();
     }
-
-    close();
-    showToast(`Saved ${dirty.length} change(s)`);
+    const message = failure
+      ? `${saved.length ? 'Some changes were saved on the proxy. ' : ''}${failure.message}${persistenceWarning ? ` ${persistenceWarning.message}` : ''}`
+      : persistenceWarning
+        ? `Saved on the proxy. ${persistenceWarning.message}`
+        : `Saved ${saved.length} change(s)`;
+    showToast(message, Boolean(failure || persistenceWarning));
   }
 
   function showToast(message, error = false) {
@@ -132,7 +108,7 @@ export default function TranslationEditPanel() {
     setToast({ show: true, message, error });
     toastTimerRef.current = setTimeout(() => {
       setToast({ show: false, message: '', error: false });
-    }, 1800);
+    }, error ? 7000 : 1800);
   }
 
   const toastNode = toast.show
@@ -160,6 +136,7 @@ export default function TranslationEditPanel() {
                   class="tedit-input"
                   value={field.translated}
                   placeholder="Translation"
+                  disabled={saving}
                   onInput={event => {
                     const translated = event.currentTarget.value;
                     setPending(values => values.map((value, itemIndex) =>

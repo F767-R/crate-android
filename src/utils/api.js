@@ -1,37 +1,40 @@
 import { config } from '../config.js';
 import { userId } from '../stores/state.js';
 import { fetchLyricsFromMultipleSources } from './lyricsSources.js';
+import { fetchWithTimeout, httpError } from './request.js';
+import { createArtworkPool } from './artworkPool.js';
 
 const API_HEADERS = {
-  'X-Emby-Authorization': `MediaBrowser Client="${config.CLIENT_NAME}", Device="${config.DEVICE_ID}", DeviceId="${config.DEVICE_ID}", Version="${config.CLIENT_VERSION}"`,
+  'Authorization': `MediaBrowser Client="${config.CLIENT_NAME}", Device="${config.DEVICE_ID}", DeviceId="${config.DEVICE_ID}", Version="${config.CLIENT_VERSION}"`,
   'Content-Type': 'application/json',
 };
 
 async function apiRequest(endpoint, options = {}) {
   const url = new URL(`${config.SERVER}${endpoint}`);
-  url.searchParams.set('api_key', config.API_KEY);
-  const response = await fetch(url, {
+  url.searchParams.set('ApiKey', config.API_KEY);
+  return fetchWithTimeout(url, {
     ...options,
     headers: { ...API_HEADERS, ...options.headers },
+  }, {
+    consume: response => {
+      if (!response.ok) throw httpError(response.status);
+      return response.json();
+    },
   });
-  if (!response.ok) {
-    throw new Error(`API ${response.status}: ${endpoint}`);
-  }
-  return response.json();
 }
 
-export async function getUserId() {
-  const data = await apiRequest('/Users');
+export async function getUserId(options = {}) {
+  const data = await apiRequest('/Users', options);
   return data[0]?.Id;
 }
 
-export async function getMusicLibraryId(userId) {
-  const data = await apiRequest(`/Users/${userId}/Views`);
+export async function getMusicLibraryId(userId, options = {}) {
+  const data = await apiRequest(`/Users/${userId}/Views`, options);
   const items = data.Items || data;
   return (Array.isArray(items) ? items : []).find(v => v.CollectionType === 'music')?.Id;
 }
 
-export async function getAlbums(userId, libraryId, parentId = null) {
+export async function getAlbums(userId, libraryId, parentId = null, options = {}) {
   const params = new URLSearchParams({
     ParentId: parentId || libraryId,
     IncludeItemTypes: 'MusicAlbum',
@@ -40,10 +43,10 @@ export async function getAlbums(userId, libraryId, parentId = null) {
     Recursive: 'true',
     Fields: 'PrimaryImageAspectRatio,MediaSourceCount',
   });
-  return apiRequest(`/Users/${userId}/Items?${params}`);
+  return apiRequest(`/Users/${userId}/Items?${params}`, options);
 }
 
-export async function getAlbumTracks(userId, albumId) {
+export async function getAlbumTracks(userId, albumId, options = {}) {
   const params = new URLSearchParams({
     ParentId: albumId,
     IncludeItemTypes: 'Audio',
@@ -51,10 +54,10 @@ export async function getAlbumTracks(userId, albumId) {
     SortOrder: 'Ascending',
     Fields: 'MediaSources,RunTimeTicks,ParentIndexNumber,ArtistItems',
   });
-  return apiRequest(`/Users/${userId}/Items?${params}`);
+  return apiRequest(`/Users/${userId}/Items?${params}`, options);
 }
 
-export async function getAllTracks(userId, libraryId) {
+export async function getAllTracks(userId, libraryId, options = {}) {
   const params = new URLSearchParams({
     ParentId: libraryId,
     IncludeItemTypes: 'Audio',
@@ -63,7 +66,7 @@ export async function getAllTracks(userId, libraryId) {
     SortOrder: 'Ascending',
     Fields: 'RunTimeTicks,Artists,ArtistItems,AlbumId,Album,ParentIndexNumber,IndexNumber',
   });
-  return apiRequest(`/Users/${userId}/Items?${params}`);
+  return apiRequest(`/Users/${userId}/Items?${params}`, options);
 }
 
 let _playSessionCounter = 0;
@@ -82,7 +85,7 @@ export function getTrackStreamUrl(trackId, quality = 'low', startOffsetSec = 0) 
     TranscodingContainer: preset.transContainer,
     TranscodingProtocol: 'http',
     MaxStreamingBitrate: String(preset.bitrate),
-    api_key: config.API_KEY,
+    ApiKey: config.API_KEY,
   });
   if (startOffsetSec > 0) {
     params.set('StartTimeTicks', String(Math.floor(startOffsetSec * 10000000)));
@@ -91,54 +94,34 @@ export function getTrackStreamUrl(trackId, quality = 'low', startOffsetSec = 0) 
 }
 
 function imageUrl(itemId, maxWidth = 400) {
-  return `${config.SERVER}/Items/${itemId}/Images/Primary?maxWidth=${maxWidth}&quality=90&api_key=${config.API_KEY}`;
+  return `${config.SERVER}/Items/${itemId}/Images/Primary?maxWidth=${maxWidth}&quality=90&ApiKey=${config.API_KEY}`;
 }
 
-function detailImageUrl(itemId) {
-  return imageUrl(itemId, 800);
-}
+const artworkPool = createArtworkPool({
+  loadBlob: (descriptor, { signal }) => {
+    const url = new URL(`${descriptor.server}/Items/${encodeURIComponent(descriptor.itemId)}/Images/Primary`);
+    url.searchParams.set('maxWidth', descriptor.size === 'detail' ? '800' : '400');
+    url.searchParams.set('quality', '90');
+    url.searchParams.set('ApiKey', config.API_KEY);
+    if (descriptor.imageTag) url.searchParams.set('tag', descriptor.imageTag);
+    return fetchWithTimeout(url, { headers: API_HEADERS, signal }, {
+      consume: response => {
+        if (!response.ok) throw httpError(response.status);
+        return response.blob();
+      },
+    });
+  },
+});
 
-const imageBlobCache = new Map();
-const IMAGE_CACHE_MAX = 100;
-const _inFlightImageFetches = new Map();
-
-export function cachedImageUrl(itemId, size = 'primary') {
-  const cacheKey = `${itemId}:${size}`;
-  const cached = imageBlobCache.get(cacheKey);
-  if (cached) return Promise.resolve(cached);
-
-  if (_inFlightImageFetches.has(cacheKey)) return _inFlightImageFetches.get(cacheKey);
-
-  const url = size === 'detail' ? detailImageUrl(itemId) : imageUrl(itemId);
-  const promise = (async () => {
-    try {
-      const res = await fetch(url, { headers: API_HEADERS });
-      if (!res.ok) return url;
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      if (imageBlobCache.size >= IMAGE_CACHE_MAX) {
-        const oldestKey = imageBlobCache.keys().next().value;
-        const oldestUrl = imageBlobCache.get(oldestKey);
-        URL.revokeObjectURL(oldestUrl);
-        imageBlobCache.delete(oldestKey);
-      }
-      imageBlobCache.set(cacheKey, blobUrl);
-      return blobUrl;
-    } catch {
-      return url;
-    } finally {
-      _inFlightImageFetches.delete(cacheKey);
-    }
-  })();
-  _inFlightImageFetches.set(cacheKey, promise);
-  return promise;
+export function acquireArtwork(itemId, size = 'primary', imageTag = '') {
+  return artworkPool.acquire({ server: config.SERVER, itemId, size, imageTag });
 }
 
 export function getAlbumArtUrl(albumId, maxWidth = 300) {
   return imageUrl(albumId, maxWidth);
 }
 
-export async function getArtistAlbums(userId, artistId) {
+export async function getArtistAlbums(userId, artistId, options = {}) {
   const params = new URLSearchParams({
     ArtistIds: artistId,
     IncludeItemTypes: 'MusicAlbum',
@@ -146,11 +129,11 @@ export async function getArtistAlbums(userId, artistId) {
     SortOrder: 'Ascending',
     Fields: 'PrimaryImageAspectRatio',
   });
-  return apiRequest(`/Users/${userId}/Items?${params}`);
+  return apiRequest(`/Users/${userId}/Items?${params}`, options);
 }
 
-export async function getItemInfo(userId, itemId) {
-  return apiRequest(`/Users/${userId}/Items/${itemId}`);
+export async function getItemInfo(userId, itemId, options = {}) {
+  return apiRequest(`/Users/${userId}/Items/${itemId}`, options);
 }
 
 function authenticatedUrl(path, params = {}) {
@@ -158,16 +141,17 @@ function authenticatedUrl(path, params = {}) {
   for (const [key, value] of Object.entries(params)) {
     if (value != null) url.searchParams.set(key, String(value));
   }
-  url.searchParams.set('api_key', config.API_KEY);
+  url.searchParams.set('ApiKey', config.API_KEY);
   return url.toString();
 }
 
-export async function getLyrics(requestUserId, trackId, { signal } = {}) {
+export async function getLyrics(requestUserId, trackId, { signal, source = 'auto', tag = '' } = {}) {
   const activeUserId = requestUserId || userId.value || '';
   return fetchLyricsFromMultipleSources({
-    endpointUrl: authenticatedUrl(`/Items/${trackId}/Lyrics`),
+    endpointUrl: authenticatedUrl(`/Audio/${trackId}/Lyrics`),
     originalAudioUrl: authenticatedUrl(`/Audio/${trackId}/stream`, {
       UserId: activeUserId,
+      Static: true,
     }),
     transcodedFlacUrl: authenticatedUrl(`/Audio/${trackId}/universal`, {
       UserId: activeUserId,
@@ -180,6 +164,8 @@ export async function getLyrics(requestUserId, trackId, { signal } = {}) {
     }),
     headers: API_HEADERS,
     signal,
+    source,
+    tag,
   });
 }
 

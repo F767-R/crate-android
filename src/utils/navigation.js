@@ -4,11 +4,19 @@ import {
   allAlbums,
   currentViewState,
   previousViewState,
+  searchQuery,
 } from '../stores/state.js';
 
 let centerRequestId = 0;
 let gridRequestId = 0;
 let activeViewTransition = null;
+const viewHistory = [];
+let navigationRevision = 0;
+let searchRevision = 0;
+let pendingView = null;
+
+export const getNavigationRevision = () => searchRevision;
+export function cancelPendingSearch() { searchRevision++; }
 
 function viewIdentity(view) {
   if (!view) return 'unknown';
@@ -17,11 +25,25 @@ function viewIdentity(view) {
   return view.type || 'unknown';
 }
 
-export function navigateToView(nextView) {
-  const apply = () => { currentViewState.value = nextView; };
+export function navigateToView(nextView, { remember = true } = {}) {
+  const previous = pendingView || currentViewState.value;
+  const changesScreen = viewIdentity(previous) !== viewIdentity(nextView);
+  if (nextView.type === 'grid') viewHistory.length = 0;
+  else if (remember && changesScreen) {
+    viewHistory.push(previous);
+    if (viewHistory.length > 50) viewHistory.shift();
+  }
+  pendingView = nextView;
+  cancelPendingSearch();
+  const revision = ++navigationRevision;
+  const apply = () => {
+    if (revision !== navigationRevision) return;
+    currentViewState.value = nextView;
+    searchQuery.value = nextView.type === 'search' ? nextView.query || '' : '';
+    pendingView = null;
+  };
   const doc = typeof document !== 'undefined' ? document : null;
   const reducedMotion = doc?.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const changesScreen = viewIdentity(currentViewState.value) !== viewIdentity(nextView);
 
   if (!doc?.startViewTransition || reducedMotion || !changesScreen) {
     apply();
@@ -35,10 +57,23 @@ export function navigateToView(nextView) {
   transition.finished
     .catch(() => {})
     .finally(() => {
-      if (activeViewTransition === transition) activeViewTransition = null;
-      doc.documentElement.classList.remove('view-transition-running');
+      if (activeViewTransition === transition) {
+        activeViewTransition = null;
+        doc.documentElement.classList.remove('view-transition-running');
+      }
     });
   return transition;
+}
+
+export function goBackView() {
+  const view = pendingView || currentViewState.value;
+  if (view.type === 'grid') return false;
+  const previous = viewHistory.pop()
+    || (view.type === 'lyrics' ? previousViewState.value : null)
+    || { type: 'grid' };
+  if (view.type === 'lyrics') previousViewState.value = null;
+  navigateToView(previous, { remember: false });
+  return true;
 }
 
 export function trackAlbumId(track) {
@@ -69,15 +104,14 @@ export function showAlbumGrid({ restoreScroll = false, centerAlbumId = null } = 
 }
 
 export function showLyricsView() {
-  if (currentViewState.value.type === 'lyrics') return;
-  previousViewState.value = currentViewState.value;
+  const view = pendingView || currentViewState.value;
+  if (view.type === 'lyrics') return;
+  previousViewState.value = view;
   navigateToView({ type: 'lyrics' });
 }
 
 export function hideLyricsView() {
-  const previous = previousViewState.value;
-  previousViewState.value = null;
-  navigateToView(previous || { type: 'grid' });
+  if ((pendingView || currentViewState.value).type === 'lyrics') goBackView();
 }
 
 export function showNowPlayingTrack(track) {

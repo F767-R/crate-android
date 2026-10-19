@@ -1,330 +1,163 @@
 import {
-  PLAY_HISTORY_MAX,
-  albumGridFocusAlbumId,
-  albumGridFollowPlayback,
-  currentIndex,
-  currentTracks,
-  currentViewState,
-  playHistory,
-  playbackCurrentTrack,
-  playbackDuration,
-  playbackItemCached,
-  playbackIsLocal,
-  playbackPlaying,
-  playbackPosition,
-  queue,
-  repeatMode,
-  resumeAfterQueue,
-  saveQueue,
-  setPlaybackState,
-  shuffleOn,
-  sleepDurationMinutes,
-  sleepEndTime,
-  sleepMode,
-  sleepOriginalQueueLength,
-  sleepQueueDrained,
-  sleepRefreshIntervalId,
-  sleepTimerId,
+  albumGridFocusAlbumId, albumGridFollowPlayback, currentTracks, currentViewState,
+  playbackCurrentTrack, playbackPosition, repeatMode, shuffleOn,
 } from '../stores/state.js';
-import { config, qualityPreset } from '../config.js';
-import { getAlbumArtUrl, getTrackStreamUrl } from './api.js';
-import { audioShim } from './playerShim.js';
+import { qualityPreset } from '../config.js';
 import { trackAlbumId } from './navigation.js';
-import { nativeIsCached } from './nativeBridge.js';
+import { audioShim } from './playerShim.js';
+import {
+  isNativePlayback, nativePlaybackCommand, nativePlaySelection, nativeQueueChange,
+  toNativeTrack, nativeDesiredPlaying, getNativePlaybackRevision,
+} from './nativePlayback.js';
+import { downloadedOnly, libraryUsingSaved } from '../stores/offline.js';
+import { downloadedIds, filterDownloadedTracks } from './downloads.js';
+import * as legacy from './legacyPlayback.js';
 
-let listenersAttached = false;
-let progressReportTimer = null;
-
-function enrichTrack(track) {
-  if (!track) return null;
-  const ImageUrl = track.ImageUrl || (track.AlbumId ? getAlbumArtUrl(track.AlbumId, 300) : null);
-  return { ...track, ImageUrl };
+// Choose at command time: Android may become ready after the UI mounts.
+// The fallback owns its async ordering; nativePlayback owns bridge ordering.
+function followAlbum(albumId) {
+  const view = currentViewState.value;
+  const follow = view.type !== 'album' || !albumId || view.albumId !== albumId;
+  albumGridFollowPlayback.value = follow;
+  albumGridFocusAlbumId.value = follow ? albumId : null;
 }
 
-async function reportPlayback(kind, track = playbackCurrentTrack.value, position = playbackPosition.value, paused = false) {
-  if (!track) return;
-  const path = {
-    Start: '/Sessions/Playing',
-    Progress: '/Sessions/Playing/Progress',
-    Stopped: '/Sessions/Playing/Stopped',
-  }[kind];
-  if (!path) return;
-
-  try {
-    await fetch(`${config.SERVER}${path}?api_key=${encodeURIComponent(config.API_KEY)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ItemId: track.Id,
-        PositionTicks: Math.floor(Math.max(0, position || 0) * 10000000),
-        IsPaused: !!paused,
-        PlayMethod: 'Transcode',
-      }),
-      keepalive: kind === 'Stopped',
-    });
-  } catch (_) {}
-}
-
-async function startTrack(track, { startOffset = 0, syncIndex = true, cachedHint = false } = {}) {
-  if (!track?.Id) return;
-
-  if (albumGridFollowPlayback.value) {
-    albumGridFocusAlbumId.value = trackAlbumId(track);
+function useDownloadedQuality(track) {
+  if ((downloadedOnly.value || libraryUsingSaved.value) && downloadedIds.value.has(track?.Id) && qualityPreset.value !== 'low') {
+    qualityPreset.value = 'low';
+    if (isNativePlayback()) nativePlaybackCommand('setPlaybackOptions', { quality: 'low' });
   }
-
-  const tracks = currentTracks.value || [];
-  if (syncIndex) {
-    const index = tracks.findIndex(item => item.Id === track.Id);
-    if (index >= 0) currentIndex.value = index;
-  }
-
-  const enriched = enrichTrack(track);
-  const duration = Math.max(0, (track.RunTimeTicks || 0) / 10000000);
-  const offset = Math.max(0, Math.min(Number(startOffset) || 0, duration || Infinity));
-  const url = getTrackStreamUrl(track.Id, qualityPreset.value, offset);
-
-  setPlaybackState({
-    trackId: track.Id,
-    currentTrack: enriched,
-    position: offset,
-    duration,
-    startOffset: offset,
-    playing: false,
-    isLocal: false,
-    buffering: !cachedHint,
-    itemCached: cachedHint,
-    quality: qualityPreset.value,
-    error: null,
-  });
-  audioShim.setSrc(url, enriched, { itemCached: cachedHint });
-  await audioShim.play({
-    url,
-    startPositionMs: Math.round(offset * 1000),
-    cache: qualityPreset.value === 'low',
-    cached: cachedHint,
-  });
-  reportPlayback('Start', enriched, offset, false);
 }
 
 export async function playTrack(track) {
-  const albumId = trackAlbumId(track);
-  const view = currentViewState.value;
-  const outsideTrackAlbum = view.type !== 'album' || !albumId || view.albumId !== albumId;
-  albumGridFollowPlayback.value = outsideTrackAlbum;
-  albumGridFocusAlbumId.value = outsideTrackAlbum ? albumId : null;
-  resumeAfterQueue.value = null;
-  playHistory.value = [];
-  await startTrack(track);
-}
-
-export function addToQueue(track, albumId = null, position = 'last') {
-  if (!track?.Id) return;
-  const item = { track, albumId: albumId || track.AlbumId || null };
-  queue.value = position === 'next'
-    ? [item, ...queue.value]
-    : [...queue.value, item];
-  sleepQueueDrained.value = false;
-  saveQueue();
-}
-
-export function playNextInQueue(track, albumId = null) {
-  addToQueue(track, albumId, 'next');
-}
-
-export async function playNextFromQueue(index = 0) {
-  if (!queue.value.length) return false;
-  const nextQueue = [...queue.value];
-  const safeIndex = Math.max(0, Math.min(index, nextQueue.length - 1));
-  const [item] = nextQueue.splice(safeIndex, 1);
-  if (!item?.track) return false;
-
-  if (!resumeAfterQueue.value) {
-    resumeAfterQueue.value = {
-      tracks: currentTracks.value,
-      index: currentIndex.value,
-    };
-  }
-
-  queue.value = nextQueue;
-  if (sleepMode.value === 'queue' && nextQueue.length === 0) {
-    sleepQueueDrained.value = true;
-  }
-  saveQueue();
-  currentTracks.value = [item.track];
-  currentIndex.value = 0;
-  albumGridFollowPlayback.value = true;
-  albumGridFocusAlbumId.value = trackAlbumId(item.track);
-  await startTrack(item.track);
-  return true;
+  if (!track?.Id) return false;
+  useDownloadedQuality(track);
+  currentTracks.value = filterDownloadedTracks(currentTracks.value);
+  followAlbum(trackAlbumId(track));
+  if (!isNativePlayback()) return legacy.playTrack(track);
+  const tracks = currentTracks.value.some(item => item.Id === track.Id) ? currentTracks.value : [track];
+  return nativePlaySelection(tracks, tracks.findIndex(item => item.Id === track.Id));
 }
 
 export async function playFromHere(tracks, startIndex, albumId = null) {
   if (!Array.isArray(tracks) || !tracks.length) return;
-  const index = Math.max(0, Math.min(startIndex, tracks.length - 1));
-  const track = tracks[index];
-
-  const resolvedAlbumId = albumId || trackAlbumId(track);
-  const view = currentViewState.value;
-  const outsideTrackAlbum = view.type !== 'album' || !resolvedAlbumId || view.albumId !== resolvedAlbumId;
-  albumGridFollowPlayback.value = outsideTrackAlbum;
-  albumGridFocusAlbumId.value = outsideTrackAlbum ? resolvedAlbumId : null;
-
-  currentTracks.value = tracks;
-  // The visible queue owns the continuation. Park the source list at
-  // its end so those tracks are not replayed after the queue drains.
-  currentIndex.value = tracks.length - 1;
-  resumeAfterQueue.value = null;
-  playHistory.value = [];
-  queue.value = tracks.slice(index + 1).map(item => ({
-    track: item,
-    albumId: albumId || item.AlbumId || track.AlbumId || null,
-  }));
-  sleepQueueDrained.value = sleepMode.value === 'queue' && queue.value.length === 0;
-  saveQueue();
-  await startTrack(track, { syncIndex: false });
-}
-
-export async function handleNext() {
-  if (await playNextFromQueue()) return;
-
-  let tracks = currentTracks.value || [];
-  let index = currentIndex.value;
+  if (downloadedOnly.value) { tracks = filterDownloadedTracks(tracks.slice(Math.max(0, startIndex))); startIndex = 0; }
   if (!tracks.length) return;
-
-  if (shuffleOn.value) {
-    if (tracks.length <= 1) return;
-    if (index >= 0) {
-      const history = [...playHistory.value, index];
-      playHistory.value = history.slice(-PLAY_HISTORY_MAX);
-    }
-    let nextIndex;
-    do {
-      nextIndex = Math.floor(Math.random() * tracks.length);
-    } while (nextIndex === index);
-    currentIndex.value = nextIndex;
-    await startTrack(tracks[nextIndex]);
-    return;
-  }
-
-  if (resumeAfterQueue.value) {
-    const resume = resumeAfterQueue.value;
-    resumeAfterQueue.value = null;
-    tracks = resume.tracks || [];
-    index = resume.index;
-    currentTracks.value = tracks;
-    currentIndex.value = index;
-  }
-
-  if (index < tracks.length - 1) {
-    currentIndex.value = index + 1;
-    await startTrack(tracks[index + 1]);
-  } else if (repeatMode.value === 'all' && tracks.length) {
-    currentIndex.value = 0;
-    await startTrack(tracks[0]);
-  }
+  const index = Math.max(0, Math.min(startIndex, tracks.length - 1));
+  useDownloadedQuality(tracks[index]);
+  followAlbum(albumId || trackAlbumId(tracks[index]));
+  if (!isNativePlayback()) return legacy.playFromHere(tracks, index, albumId);
+  return nativePlaySelection(tracks.map(item => ({
+    ...item, AlbumId: albumId || item.AlbumId || tracks[index].AlbumId,
+  })), index, 'replace-tail');
 }
 
-function clearSleepTimerState() {
-  if (sleepTimerId.value) clearTimeout(sleepTimerId.value);
-  if (sleepRefreshIntervalId.value) clearInterval(sleepRefreshIntervalId.value);
-  sleepTimerId.value = null;
-  sleepRefreshIntervalId.value = null;
-  sleepEndTime.value = null;
-  sleepMode.value = null;
-  sleepDurationMinutes.value = 0;
-  sleepOriginalQueueLength.value = 0;
-  sleepQueueDrained.value = false;
-  try { localStorage.removeItem('crateSleepTimer'); } catch (_) {}
+export function addToQueue(track, albumId = null, position = 'last') {
+  if (!track?.Id) return;
+  return isNativePlayback()
+    ? nativeQueueChange('add', { track: toNativeTrack({ ...track, AlbumId: albumId || track.AlbumId }), position })
+    : legacy.addToQueue(track, albumId, position);
 }
 
-export async function handleTrackEnd() {
-  if (sleepMode.value === 'track' || (sleepMode.value === 'queue' && sleepQueueDrained.value)) {
-    clearSleepTimerState();
-    setPlaybackState({ playing: false });
-    await audioShim.pause();
-    return;
-  }
-  if (repeatMode.value === 'one' && playbackCurrentTrack.value) {
-    await startTrack(playbackCurrentTrack.value, { startOffset: 0, syncIndex: false });
-    return;
-  }
-  await handleNext();
+export function playNextInQueue(track, albumId = null) {
+  return addToQueue(track, albumId, 'next');
+}
+
+export async function playNextFromQueue(index = 0) {
+  return isNativePlayback()
+    ? nativePlaybackCommand('playQueueItem', { index, expectedRevision: getNativePlaybackRevision() })
+    : legacy.playNextFromQueue(index);
+}
+
+export function handleNext() {
+  return isNativePlayback() ? nativePlaybackCommand('nextTrack') : legacy.handleNext();
 }
 
 export async function handlePrev() {
-  const tracks = currentTracks.value || [];
-  if (!tracks.length || !playbackCurrentTrack.value) return;
-
-  if (shuffleOn.value) {
-    const history = [...playHistory.value];
-    if (history.length) {
-      const previousIndex = history.pop();
-      playHistory.value = history;
-      currentIndex.value = previousIndex;
-      await startTrack(tracks[previousIndex]);
-    } else {
-      await seekTo(0);
-    }
-    return;
-  }
-
-  if (playbackPosition.value > 3) {
-    await seekTo(0);
-    return;
-  }
-
-  if (currentIndex.value > 0) {
-    currentIndex.value--;
-    await startTrack(tracks[currentIndex.value]);
-  } else if (repeatMode.value === 'all') {
-    currentIndex.value = tracks.length - 1;
-    await startTrack(tracks[currentIndex.value]);
-  } else {
-    await seekTo(0);
-  }
+  return isNativePlayback() ? nativePlaybackCommand('previousTrack') : legacy.handlePrev();
 }
 
-export async function seekTo(seconds, forcePlay = playbackPlaying.value) {
-  const track = playbackCurrentTrack.value;
-  if (!track) return;
-  const duration = playbackDuration.value || (track.RunTimeTicks || 0) / 10000000;
-  const target = Math.max(0, Math.min(Number(seconds) || 0, duration || Infinity));
+export async function handleTrackEnd() {
+  if (!isNativePlayback()) return legacy.handleTrackEnd(); // Android advances without the WebView.
+}
 
-  if (playbackIsLocal.value || qualityPreset.value === 'high') {
-    await audioShim.seek(target);
-    if (forcePlay && audioShim.paused) await audioShim.resume();
-  } else {
-    await startTrack(track, { startOffset: target, syncIndex: false });
-    if (!forcePlay) await audioShim.pause();
-  }
-  reportPlayback('Progress', track, target, !forcePlay);
+export async function retryPlayback() {
+  return isNativePlayback() ? nativePlaybackCommand('retryPlayback') : legacy.retryPlayback();
+}
+
+export async function seekTo(seconds, forcePlay) {
+  return isNativePlayback()
+    ? nativePlaybackCommand('seekAbsolute', {
+      positionMs: Math.round(Math.max(0, Number(seconds) || 0) * 1000),
+      playWhenReady: forcePlay ?? nativeDesiredPlaying.value,
+    })
+    : legacy.seekTo(seconds, forcePlay);
 }
 
 export async function toggleQuality() {
-  const track = playbackCurrentTrack.value;
-  const nextQuality = qualityPreset.value === 'high' ? 'low' : 'high';
-  const position = playbackPosition.value;
-  const cachedHint = nextQuality === 'low' && track
-    ? (playbackItemCached.value || await nativeIsCached(track.Id))
-    : false;
-  qualityPreset.value = nextQuality;
-  if (!track) return;
-  const wasPlaying = playbackPlaying.value;
-  await startTrack(track, { startOffset: position, syncIndex: false, cachedHint });
-  if (!wasPlaying) await audioShim.pause();
+  // Publish the preference before a pending cache lookup or another tap.
+  const quality = qualityPreset.value === 'high' ? 'low' : 'high';
+  qualityPreset.value = quality;
+  return isNativePlayback()
+    ? nativePlaybackCommand('setPlaybackOptions', { quality })
+    : legacy.changeQuality(quality);
 }
 
 export async function togglePlayPause() {
   if (!playbackCurrentTrack.value) return;
-  if (playbackPlaying.value) await audioShim.pause();
-  else await audioShim.resume();
+  if (!isNativePlayback()) return legacy.togglePlayPause();
+  nativeDesiredPlaying.value = !nativeDesiredPlaying.value;
+  return nativePlaybackCommand(nativeDesiredPlaying.value ? 'resume' : 'pause');
 }
 
-function setupBrowserMediaSession() {
+export async function setPlaying(playing) {
+  if (!playbackCurrentTrack.value) return;
+  if (!isNativePlayback()) return legacy.setPlaying(playing);
+  nativeDesiredPlaying.value = playing;
+  return nativePlaybackCommand(playing ? 'resume' : 'pause');
+}
+
+export function toggleShuffle() {
+  shuffleOn.value = !shuffleOn.value;
+  if (isNativePlayback()) return nativePlaybackCommand('setPlaybackOptions', { shuffleOn: shuffleOn.value });
+}
+
+export function toggleRepeat() {
+  const modes = ['off', 'all', 'one'];
+  repeatMode.value = modes[(modes.indexOf(repeatMode.value) + 1) % modes.length];
+  if (isNativePlayback()) return nativePlaybackCommand('setPlaybackOptions', { repeatMode: repeatMode.value });
+}
+
+export function removeQueuedTrack(index, expectedRevision = getNativePlaybackRevision()) {
+  return isNativePlayback()
+    ? nativePlaybackCommand('mutateQueue', { action: 'remove', index, expectedRevision })
+    : legacy.removeQueuedTrack(index);
+}
+
+export function clearQueuedTracks() {
+  return isNativePlayback() ? nativeQueueChange('clear') : legacy.clearQueuedTracks();
+}
+
+export function moveQueuedTrack(index, toIndex, expectedRevision = getNativePlaybackRevision()) {
+  return isNativePlayback()
+    ? nativePlaybackCommand('mutateQueue', { action: 'move', index, toIndex, expectedRevision })
+    : legacy.moveQueuedTrack(index, toIndex);
+}
+
+let listenersAttached = false;
+export function attachPlaybackControlListeners() {
+  if (listenersAttached) return;
+  listenersAttached = true;
+  audioShim.addEventListener('ended', () => { handleTrackEnd(); });
+  audioShim.addEventListener('next', () => { handleNext(); });
+  audioShim.addEventListener('previous', () => { handlePrev(); });
+  audioShim.addEventListener('sessionseek', event => { seekTo(event.position, true); });
+  legacy.attachPlaybackReporting();
+
   if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
   const handlers = {
-    play: () => togglePlayPause(),
-    pause: () => togglePlayPause(),
+    play: () => setPlaying(true),
+    pause: () => setPlaying(false),
     previoustrack: () => handlePrev(),
     nexttrack: () => handleNext(),
     seekbackward: details => seekTo(playbackPosition.value - (details.seekOffset || 10)),
@@ -334,30 +167,4 @@ function setupBrowserMediaSession() {
   for (const [action, handler] of Object.entries(handlers)) {
     try { navigator.mediaSession.setActionHandler(action, handler); } catch (_) {}
   }
-}
-
-export function attachPlaybackControlListeners() {
-  if (listenersAttached) return;
-  listenersAttached = true;
-
-  audioShim.addEventListener('ended', () => { handleTrackEnd(); });
-  audioShim.addEventListener('next', () => { handleNext(); });
-  audioShim.addEventListener('previous', () => { handlePrev(); });
-  audioShim.addEventListener('sessionseek', event => { seekTo(event.position, true); });
-  audioShim.addEventListener('play', () => {
-    clearInterval(progressReportTimer);
-    progressReportTimer = setInterval(() => {
-      reportPlayback('Progress', playbackCurrentTrack.value, playbackPosition.value, false);
-    }, 15000);
-  });
-  audioShim.addEventListener('pause', () => {
-    clearInterval(progressReportTimer);
-    reportPlayback('Progress', playbackCurrentTrack.value, playbackPosition.value, true);
-  });
-  if (typeof window !== 'undefined') {
-    window.addEventListener('beforeunload', () => {
-      reportPlayback('Stopped', playbackCurrentTrack.value, playbackPosition.value, true);
-    });
-  }
-  setupBrowserMediaSession();
 }

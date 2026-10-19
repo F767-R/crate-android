@@ -1,43 +1,51 @@
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { currentViewState, allAlbums, userId, musicLibraryId } from '../stores/state.js';
-import { getAlbums, getArtistAlbums, cachedImageUrl } from '../utils/api.js';
+import { currentViewState, allAlbums } from '../stores/state.js';
+import { ensureAlbumsLoaded, libraryGeneration } from '../utils/libraryData.js';
+import { visibleLibraryAlbums } from '../utils/downloads.js';
 import AlbumGrid from './AlbumGrid.jsx';
 import AlbumDetail from './AlbumDetail.jsx';
 import TrackList from './TrackList.jsx';
 import SearchResults from './SearchResults.jsx';
 import ArtistView from './ArtistView.jsx';
 import LyricsView from './LyricsView.jsx';
+import RequestFailure from './RequestFailure.jsx';
 
 export default function MainView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+  const generation = libraryGeneration.value;
 
   useEffect(() => {
+    const controller = new AbortController();
     async function loadInitial() {
       try {
         setError(null);
-        const albums = await getAlbums(userId.value, musicLibraryId.value);
-        allAlbums.value = albums.Items || [];
+        setLoading(true);
+        await ensureAlbumsLoaded({ signal: controller.signal });
+        if (controller.signal.aborted) return;
         setLoading(false);
       } catch (err) {
-        console.error('Failed to load albums:', err);
-        setError(err.message || 'Failed to load the music library.');
+        if (controller.signal.aborted || err?.code === 'aborted') return;
+        setError(err);
         setLoading(false);
       }
     }
     loadInitial();
-  }, []);
+    return () => controller.abort();
+  }, [attempt, generation]);
 
   // Read signals before early return to establish subscription
   const view = currentViewState.value;
 
-  if (loading) {
+  if (loading && !allAlbums.value.length) {
     return <div class="status-msg">Loading library…</div>;
   }
 
-  if (error) {
-    return <div class="status-msg error">⚠️ {error}</div>;
+  if (error && !allAlbums.value.length) {
+    return <RequestFailure title="Could not load the music library" error={error}
+      onRetry={() => setAttempt(value => value + 1)} />;
   }
 
   let content;
@@ -48,7 +56,7 @@ export default function MainView() {
       viewKey = 'grid';
       content = (
         <AlbumGrid
-          albums={allAlbums.value}
+          albums={visibleLibraryAlbums.value}
           centerAlbumId={view.centerAlbumId}
           centerRequestId={view.gridRequestId}
         />
@@ -84,8 +92,12 @@ export default function MainView() {
       break;
     default:
       viewKey = 'grid';
-      content = <AlbumGrid albums={allAlbums.value} />;
+      content = <AlbumGrid albums={visibleLibraryAlbums.value} />;
   }
 
-  return <div class="view-stage" key={viewKey}>{content}</div>;
+  return <>
+    {error && <RequestFailure title="Could not refresh the music library" error={error}
+      onRetry={() => setAttempt(value => value + 1)} />}
+    <div class="view-stage" key={`${viewKey}:${generation}`}>{content}</div>
+  </>;
 }

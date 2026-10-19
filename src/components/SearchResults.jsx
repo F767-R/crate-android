@@ -1,30 +1,30 @@
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
-  albumDetailCache,
   albumTranslationCache,
   allAlbums,
   allTracks,
   allTracksFetched,
-  contextMenuTarget,
   currentTracks,
   isTranslated,
   playbackTrackId,
   searchQuery,
   trackTranslationCache,
 } from '../stores/state.js';
-import { cachedImageUrl, formatDuration } from '../utils/api.js';
-import { ensureAllTracksLoaded } from '../utils/libraryData.js';
-import { searchLibrary } from '../utils/librarySearch.js';
+import DownloadBadge from './DownloadBadge.jsx';
+import { visibleLibraryAlbums, visibleLibraryTracks } from '../utils/downloads.js';
+import { downloadedOnly } from '../stores/offline.js';
+import { useRowInteractions } from '../utils/useRowInteractions.js';
+import { formatDuration } from '../utils/api.js';
+import { ensureAllTracksLoaded, libraryGeneration } from '../utils/libraryData.js';
+import { createLibrarySearchSelector } from '../utils/librarySearch.js';
 import { playTrack } from '../utils/playbackControls.js';
 import { translatedAlbumText, translatedTrackText } from '../utils/metadata.js';
 import { navigateToView, showAlbumGrid } from '../utils/navigation.js';
-
-const activateWithKeyboard = action => event => {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  action();
-};
+import RequestFailure from './RequestFailure.jsx';
+import Artwork from './Artwork.jsx';
+import WindowedList from './WindowedList.jsx';
+import WindowedAlbumGrid from './WindowedAlbumGrid.jsx';
 
 const openAlbum = album => {
   navigateToView({
@@ -37,59 +37,36 @@ const openAlbum = album => {
 
 export default function SearchResults({ query }) {
   const tracksFetched = allTracksFetched.value;
+  const generation = libraryGeneration.value;
   const [loading, setLoading] = useState(!tracksFetched);
   const [error, setError] = useState(null);
-  const [loadedImages, setLoadedImages] = useState(new Map());
-  const longPressTimerRef = useRef(null);
-  const longPressFiredRef = useRef(false);
-
-  useEffect(() => () => {
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-  }, []);
+  const [attempt, setAttempt] = useState(0);
+  const searchRef = useRef(null);
+  if (!searchRef.current) searchRef.current = createLibrarySearchSelector();
+  const contextMenuHandlers = useRowInteractions([query, generation, downloadedOnly.value]);
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     setError(null);
     setLoading(!tracksFetched);
-    ensureAllTracksLoaded()
+    ensureAllTracksLoaded({ signal: controller.signal })
       .catch(err => {
-        if (active) setError(err.message || 'Failed to load tracks for search.');
+        if (active && err?.code !== 'aborted') setError(err);
       })
       .finally(() => {
         if (active) setLoading(false);
       });
-    return () => { active = false; };
-  }, [query, tracksFetched]);
+    return () => { active = false; controller.abort(); };
+  }, [query, tracksFetched, attempt, generation]);
 
-  const results = searchLibrary(
+  const results = searchRef.current(
     query,
-    allAlbums.value,
-    allTracks.value,
+    visibleLibraryAlbums.value,
+    visibleLibraryTracks.value,
     albumTranslationCache.value,
     trackTranslationCache.value,
   );
-  const albumImageKey = results.albums
-    .filter(album => album.ImageTags?.Primary)
-    .map(album => album.Id)
-    .join('|');
-
-  useEffect(() => {
-    let active = true;
-    setLoadedImages(new Map());
-    for (const album of results.albums) {
-      if (!album.ImageTags?.Primary) continue;
-      cachedImageUrl(album.Id, 'primary').then(url => {
-        if (!active) return;
-        setLoadedImages(previous => {
-          const next = new Map(previous);
-          next.set(album.Id, url);
-          return next;
-        });
-      });
-    }
-    return () => { active = false; };
-  }, [albumImageKey]);
-
   const backToAlbums = () => {
     searchQuery.value = '';
     showAlbumGrid({ restoreScroll: true });
@@ -99,41 +76,6 @@ export default function SearchResults({ query }) {
     currentTracks.value = results.tracks;
     await playTrack(track);
   };
-
-  const openContextMenu = (event, target) => {
-    event.preventDefault();
-    const point = event.touches?.[0] || event;
-    contextMenuTarget.value = {
-      x: point.clientX,
-      y: point.clientY,
-      ...target,
-    };
-  };
-
-  const contextMenuHandlers = target => ({
-    onContextMenu: event => openContextMenu(event, target),
-    onPointerDown: event => {
-      longPressFiredRef.current = false;
-      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = setTimeout(() => {
-        longPressTimerRef.current = null;
-        longPressFiredRef.current = true;
-        openContextMenu(event, target);
-      }, 500);
-    },
-    onPointerUp: () => {
-      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    },
-    onPointerCancel: () => {
-      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    },
-    onPointerLeave: () => {
-      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    },
-  });
 
   return (
     <div class="search-results">
@@ -145,39 +87,34 @@ export default function SearchResults({ query }) {
       {loading ? (
         <div class="status-msg">Searching…</div>
       ) : error ? (
-        <div class="status-msg error">Failed to load tracks for search.<br /><code>{error}</code></div>
+        <RequestFailure title="Could not load tracks for search" error={error}
+          onRetry={() => setAttempt(value => value + 1)} />
       ) : results.albums.length === 0 && results.tracks.length === 0 ? (
-        <div class="status-msg">Nothing matched.</div>
+        <div class="status-msg">{downloadedOnly.value ? "No downloaded tracks matched." : "Nothing matched."}</div>
       ) : (
         <>
           {results.albums.length > 0 && (
-            <div class="album-grid" style="margin-bottom:30px">
-              {results.albums.map((album, index) => {
+            <div style="margin-bottom:30px">
+              <WindowedAlbumGrid albums={results.albums} renderAlbum={album => {
                 const display = translatedAlbumText(album, isTranslated.value, albumTranslationCache.value);
                 const activate = () => openAlbum(album);
-                const albumTracks = albumDetailCache.value.get(album.Id) || [];
                 return (
                   <div
                     class="album-card"
                     key={album.Id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => { if (!longPressFiredRef.current) activate(); }}
-                    onKeyDown={activateWithKeyboard(activate)}
                     {...contextMenuHandlers({
-                      track: albumTracks[0] || null,
-                      tracks: albumTracks,
-                      index: 0,
+                      kind: 'album',
                       albumId: album.Id,
-                    })}
+                    }, activate)}
                   >
                     <div class="art-wrap">
                       {album.ImageTags?.Primary ? (
-                        <img
+                        <Artwork
+                          itemId={album.Id}
+                          imageTag={album.ImageTags.Primary}
                           data-art-id={album.Id}
-                          src={loadedImages.get(album.Id) || ''}
-                          {...(index < 6 ? { fetchpriority: 'high' } : { loading: 'lazy' })}
-                          decoding="async"
                           alt=""
                         />
                       ) : <div class="art-fallback">♪</div>}
@@ -186,42 +123,40 @@ export default function SearchResults({ query }) {
                     <div class="album-artist" data-original-artist={display.artist}>{display.artist}</div>
                   </div>
                 );
-              })}
+              }} />
             </div>
           )}
 
           {results.tracks.length > 0 && (
-            <div class="track-list">
-              {results.tracks.map((track, index) => {
+            <WindowedList className="track-list" items={results.tracks} itemKey={track => track.Id} renderItem={(track, index) => {
                 const display = translatedTrackText(track, isTranslated.value, trackTranslationCache.value);
-                    const activate = () => handleTrackClick(track);
+                const activate = () => handleTrackClick(track);
                 return (
                   <div
                     class={`track-row ${playbackTrackId.value === track.Id ? 'playing' : ''}`}
+                    data-track-id={track.Id}
                     key={track.Id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => { if (!longPressFiredRef.current) activate(); }}
-                    onKeyDown={activateWithKeyboard(activate)}
                     {...contextMenuHandlers({
                       track,
                       tracks: results.tracks,
                       index,
                       albumId: track.AlbumId || null,
-                    })}
+                    }, activate)}
                   >
                     <span class="track-index">
                       <span class="idx">{track.IndexNumber ?? (index + 1)}</span>
+                      {track.ParentIndexNumber > 1 && <span class="disc-index">D{track.ParentIndexNumber}</span>}
                       <span class="playing-icon">♫</span>
                     </span>
                     <span class="name">
-                      {display.title}<span class="sub">{display.artist}</span>
+                      {display.title}<DownloadBadge track={track} /><span class="sub">{display.artist}</span>
                     </span>
                     <span class="dur">{formatDuration(track.RunTimeTicks)}</span>
                   </div>
                 );
-              })}
-            </div>
+              }} />
           )}
         </>
       )}

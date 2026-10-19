@@ -1,5 +1,7 @@
 import { signal } from '@preact/signals';
 import { buildSecrets } from './generated/secrets.js';
+import { createTranslationClient, translationScopeKey } from './utils/translationClient.js';
+import { albumTranslationCache, trackTranslationCache, translationComplete, translationError } from './stores/state.js';
 
 export const config = {
   SERVER: buildSecrets.JELLYFIN_SERVER,
@@ -26,91 +28,48 @@ export const TARGET_LANG = buildSecrets.DEEPL_TARGET_LANG;
 export const SOURCE_LANG = buildSecrets.DEEPL_SOURCE_LANG;
 export const GLOSSARY_ID = buildSecrets.DEEPL_GLOSSARY_ID;
 
-export const translationCache = new Map();
-export const pendingTranslations = new Map();
+export function getTranslationContext() {
+  const endpoint = new URL(DEEPL_API_URL, config.SERVER).toString();
+  const configuredOrigin = new URL(DEEPL_API_URL_DEFAULT, config.SERVER).origin;
+  const canSendKey = DEEPL_API_KEY && new URL(endpoint).origin === configuredOrigin;
+  return {
+    server: config.SERVER,
+    endpoint,
+    targetLang: TARGET_LANG,
+    sourceLang: SOURCE_LANG,
+    glossaryId: GLOSSARY_ID,
+    authorization: canSendKey ? `DeepL-Auth-Key ${DEEPL_API_KEY}` : '',
+  };
+}
+
+const translationClient = createTranslationClient({
+  getContext: getTranslationContext,
+  storage: typeof localStorage === 'undefined' ? null : localStorage,
+});
+
+export const translateBatch = translationClient.translateBatch;
+export const hasCachedTranslation = translationClient.hasCached;
+export const getCachedTranslation = translationClient.getCached;
+export const saveTranslationOverride = translationClient.saveOverride;
+export const getTranslationPersistenceWarning = translationClient.getPersistenceWarning;
+export const getTranslationScope = () => translationScopeKey(getTranslationContext());
 
 export function setDeeplServer() {
   const next = prompt('Translate server URL (default /translate — routed by nginx to the DeepL proxy):', DEEPL_API_URL);
   if (next === null) return;
   const trimmed = next.trim();
   if (!trimmed) return;
+  try {
+    const endpoint = new URL(trimmed, config.SERVER);
+    if (!['http:', 'https:'].includes(endpoint.protocol)) throw new Error('unsupported protocol');
+  } catch (_) {
+    translationError.value = { message: 'Enter a valid HTTP or HTTPS translation proxy address.', code: 'translation_endpoint', retryable: false };
+    return;
+  }
   DEEPL_API_URL = trimmed;
   localStorage.setItem('crateDeeplUrl', DEEPL_API_URL);
-  translationCache.clear();
-}
-
-export async function fetchTranslationBatch(uniqueTexts) {
-  try {
-    const translateUrl = new URL(DEEPL_API_URL, config.SERVER).toString();
-    const configuredTranslationOrigin = new URL(DEEPL_API_URL_DEFAULT, config.SERVER).origin;
-    const requestTranslationOrigin = new URL(translateUrl).origin;
-    const canSendDeeplKey = DEEPL_API_KEY && requestTranslationOrigin === configuredTranslationOrigin;
-    const headers = {
-      'Content-Type': 'application/json',
-      ...(canSendDeeplKey ? { Authorization: `DeepL-Auth-Key ${DEEPL_API_KEY}` } : {}),
-    };
-    const resp = await fetch(translateUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        text: uniqueTexts,
-        target_lang: TARGET_LANG,
-        ...(SOURCE_LANG ? { source_lang: SOURCE_LANG } : {}),
-        ...(GLOSSARY_ID ? { glossary_id: GLOSSARY_ID } : {}),
-        context: 'This is a song title and/or artist name shown in a music player. ' +
-                 'Translate it as a short label, not a full sentence. Keep it literal.'
-      })
-    });
-    if (!resp.ok) throw new Error(`DeepL HTTP ${resp.status}`);
-    const data = await resp.json();
-    uniqueTexts.forEach((text, index) => {
-      translationCache.set(text, data.translations[index].text);
-    });
-  } catch (err) {
-    console.warn('DeepL error, using original text:', err);
-    uniqueTexts.forEach(text => translationCache.set(text, text));
-  } finally {
-    uniqueTexts.forEach(text => pendingTranslations.delete(text));
-  }
-}
-
-export async function translateBatch(texts) {
-  const results = new Array(texts.length);
-  const trimmedByIndex = new Array(texts.length);
-  const newTexts = [];
-  const waitingOn = [];
-
-  texts.forEach((text, index) => {
-    const trimmed = text ? text.trim() : '';
-    trimmedByIndex[index] = trimmed;
-    if (!trimmed) {
-      results[index] = text || '';
-    } else if (translationCache.has(trimmed)) {
-      results[index] = translationCache.get(trimmed);
-    } else if (pendingTranslations.has(trimmed)) {
-      waitingOn.push(trimmed);
-    } else if (!newTexts.includes(trimmed)) {
-      newTexts.push(trimmed);
-    }
-  });
-
-  const toAwait = [];
-  if (newTexts.length > 0) {
-    const batchPromise = fetchTranslationBatch(newTexts);
-    newTexts.forEach(text => pendingTranslations.set(text, batchPromise));
-    toAwait.push(batchPromise);
-  }
-  waitingOn.forEach(text => {
-    const promise = pendingTranslations.get(text);
-    if (promise) toAwait.push(promise);
-  });
-
-  if (toAwait.length > 0) await Promise.all(toAwait);
-
-  texts.forEach((text, index) => {
-    if (results[index] !== undefined) return;
-    const trimmed = trimmedByIndex[index];
-    results[index] = translationCache.get(trimmed) || text;
-  });
-  return results;
+  albumTranslationCache.value = {};
+  trackTranslationCache.value = {};
+  translationComplete.value = false;
+  translationError.value = null;
 }
