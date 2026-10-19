@@ -10,8 +10,9 @@
     "dev": "vite",
     "prebuild": "npm run prepare:config",
     "build": "vite build",
-    "pretest": "npm run prepare:config",
-    "test": "node tests/playback-smoke.mjs && node tests/library-lyrics-smoke.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "test:clean": "node scripts/verify-clean-tests.mjs",
+    "typecheck": "tsc --project tsconfig.json",
     "preview": "vite preview",
     "sync": "npm run build && npx cap sync android",
     "open": "npx cap open android",
@@ -20,13 +21,14 @@
   "dependencies": {
     "@capacitor/android": "^6.1.2",
     "@capacitor/core": "^6.1.2",
-    "preact": "^10.22.0",
+    "@preact/signals": "^1.2.3",
     "htm": "^3.1.1",
-    "@preact/signals": "^1.2.3"
+    "preact": "^10.22.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.1.2",
     "@preact/preset-vite": "^2.9.0",
+    "typescript": "^7.0.2",
     "vite": "^5.4.0"
   }
 }

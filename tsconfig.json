@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": false
+  },
+  "include": [
+    "src/types/**/*.d.ts",
+    "src/utils/playbackCommands.js",
+    "src/utils/libraryStorage.js",
+    "src/utils/flacLyrics.js",
+    "src/utils/nativePlaybackProtocol.js",
+    "tests/types/**/*.js"
+  ],
+  "exclude": ["node_modules", "src/generated", "www", "android"]
+}

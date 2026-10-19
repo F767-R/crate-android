@@ -11,6 +11,7 @@ const sensitiveKeys = [
   'JELLYFIN_API_KEY',
   'DEEPL_API_KEY',
   'DEEPL_GLOSSARY_ID',
+  'DEEPL_ENDPOINT',
 ];
 
 const secretValues = sensitiveKeys
@@ -24,6 +25,28 @@ const trackedFiles = execFileSync('git', ['ls-files'], {
 }).split(/\r?\n/).filter(Boolean);
 
 let matches = [];
+if (process.argv.includes('--worktree')) {
+  const files = [...new Set(execFileSync('git', ['ls-files', '-z', '-c', '-o', '--exclude-standard'], {
+    cwd: projectRoot, encoding: 'utf8',
+  }).split('\0').filter(Boolean))];
+  for (const relativePath of files) {
+    let content;
+    try { content = await readFile(path.join(projectRoot, relativePath)); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (secretValues.some(value => content.includes(Buffer.from(value)))) matches.push(relativePath);
+  }
+  if (matches.length) {
+    console.error('Personal configuration values were detected in publishable working files:');
+    matches.forEach(relativePath => console.error(`- ${relativePath}`));
+    process.exit(1);
+  }
+  console.log(`No extracted secret values were found in ${files.length} publishable working files.`);
+  process.exit(0);
+}
+if (!secretValues.length) {
+  console.log('No non-placeholder secret values to check.');
+  process.exit(0);
+}
 try {
   const output = execFileSync(
     'git',
