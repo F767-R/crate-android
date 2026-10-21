@@ -7,6 +7,7 @@ import { setTranslationCacheOnly, translateAllMetadata } from '../utils/translat
 import { setDeeplServer } from '../config.js';
 import { safeRequestError } from '../utils/request.js';
 import { armClickSuppression } from '../utils/clickSuppression.js';
+import { THEME_OPTIONS, themePreference, setThemePreference } from '../stores/theme.js';
 
 const MIB = 1024 * 1024;
 const formatSize = bytes => {
@@ -101,6 +102,19 @@ export default function SettingsPanel() {
         <div class="settings-heading">
           <h2 id="settingsTitle">Settings</h2>
           <button ref={closeRef} class="notice-dismiss" aria-label="Close settings" onClick={close}>✕</button>
+        </div>
+        <div class="settings-section">
+          <h3>Appearance</h3>
+          <div class="theme-picker" role="radiogroup" aria-label="Theme">
+            {THEME_OPTIONS.map(({ value, label }) => (
+              <button key={value} type="button" role="radio" class={`theme-option theme-${value}`}
+                aria-checked={themePreference.value === value} onClick={() => setThemePreference(value)}>
+                <span class="theme-swatch" aria-hidden="true" />
+                {label}
+              </button>
+            ))}
+          </div>
+          <p class="settings-hint">System follows your phone's light or dark mode. Immersive lyrics always use the dark look.</p>
         </div>
         <div class="settings-section">
           <h3>Lyrics</h3>
