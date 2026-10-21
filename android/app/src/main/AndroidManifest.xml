@@ -69,6 +69,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- Album artwork for Android Auto browse lists; read-only, validated ids, bounded cache. -->
+        <provider
+            android:name=".AutoArtworkProvider"
+            android:authorities="${applicationId}.autoart"
+            android:exported="true" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -1,6 +1,7 @@
 package com.yourname.crate
 
 import android.net.Uri
+import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.LibraryResult
@@ -50,7 +51,7 @@ class AutoLibraryCallback(
         params: MediaLibraryService.LibraryParams?,
     ): ListenableFuture<LibraryResult<MediaItem>> {
         if (!trusted(browser)) return immediate(LibraryResult.ofError(LibraryResult.RESULT_ERROR_PERMISSION_DENIED))
-        return immediate(LibraryResult.ofItem(folder(ROOT_ID, "C.R.A.T.E."), params))
+        return immediate(LibraryResult.ofItem(folder(ROOT_ID, "C.R.A.T.E."), libraryParams(GRID, LIST)))
     }
 
     override fun onGetItem(
@@ -94,7 +95,14 @@ class AutoLibraryCallback(
             }
             val from = (page.coerceAtLeast(0) * pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
             val to = (from + pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
-            LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), params)
+            // Albums read like the app's grid; letters and tracks read best as lists.
+            val hints = when {
+                parentId == ALBUMS_ID -> if (loadAlbums().size <= BUCKET_THRESHOLD) libraryParams(GRID, LIST) else libraryParams(LIST, LIST)
+                parentId.startsWith(LETTER_PREFIX) -> libraryParams(GRID, LIST)
+                parentId.startsWith(ALBUM_PREFIX) -> libraryParams(LIST, LIST)
+                else -> params
+            }
+            LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), hints)
         }
     }
 
@@ -181,18 +189,31 @@ class AutoLibraryCallback(
 
     private fun folder(id: String, title: String): MediaItem = MediaItem.Builder().setMediaId(id)
         .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setIsBrowsable(true).setIsPlayable(false)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build()).build()
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).setExtras(hints(GRID, LIST)).build()).build()
+
+    // Content-style hints understood by Android Auto (1 = list, 2 = grid).
+    private fun hints(browsable: Int, playable: Int) = Bundle().apply {
+        putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
+        putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", browsable)
+        putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", playable)
+    }
+    private fun libraryParams(browsable: Int, playable: Int) =
+        MediaLibraryService.LibraryParams.Builder().setExtras(hints(browsable, playable)).build()
+
+    private fun artwork(albumId: String, imageTag: String? = null): Uri = Uri.Builder().scheme("content")
+        .authority(AutoArtworkProvider.authority(ownPackage)).appendPath("album").appendPath(albumId)
+        .appendQueryParameter("s", ART_SIZE.toString()).apply { if (imageTag != null) appendQueryParameter("t", imageTag) }.build()
 
     private fun albumFolder(album: NativeAlbum): MediaItem = MediaItem.Builder().setMediaId("$ALBUM_PREFIX${album.id}")
         .setMediaMetadata(MediaMetadata.Builder().setTitle(album.title).setArtist(album.artist).setSubtitle(album.artist)
             .setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
-            .setArtworkUri(Uri.parse(repository.artworkUrl(album.id, ART_SIZE, album.imageTag))).build()).build()
+            .setExtras(hints(LIST, LIST)).setArtworkUri(artwork(album.id, album.imageTag)).build()).build()
 
     private fun trackItem(track: NativeTrack): MediaItem = MediaItem.Builder().setMediaId("$TRACK_PREFIX${track.albumId}:${track.id}")
         .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).setAlbumTitle(track.albumTitle)
             .setSubtitle(track.artist).setDurationMs(track.durationMs).setTrackNumber(track.number)
             .setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-            .setArtworkUri(Uri.parse(repository.artworkUrl(track.albumId, ART_SIZE))).build()).build()
+            .setArtworkUri(artwork(track.albumId)).build()).build()
 
     // ---- Futures ----
 
@@ -209,6 +230,8 @@ class AutoLibraryCallback(
     }
 
     private companion object {
+        const val LIST = 1
+        const val GRID = 2
         const val ROOT_ID = "root"
         const val ALBUMS_ID = "albums"
         const val LETTER_PREFIX = "letter:"
