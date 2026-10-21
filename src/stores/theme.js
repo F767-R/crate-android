@@ -1,4 +1,5 @@
 import { signal } from '@preact/signals';
+import { nativeSetSystemBars } from '../utils/nativeBridge.js';
 
 export const THEME_OPTIONS = [
   { value: 'system', label: 'System' },
@@ -8,6 +9,8 @@ export const THEME_OPTIONS = [
 ];
 
 const STORAGE_KEY = 'crateTheme';
+// Keep in sync with --bg in styles.css; the native bars cannot read CSS variables.
+const SYSTEM_BAR_COLORS = { dark: '#12161a', amoled: '#000000', light: '#f6f3ec' };
 const values = THEME_OPTIONS.map(option => option.value);
 
 function readPreference() {
@@ -33,6 +36,7 @@ function applyTheme() {
   const theme = resolveTheme();
   document.documentElement.dataset.theme = theme;
   document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme === 'light' ? 'light' : 'dark');
+  nativeSetSystemBars(SYSTEM_BAR_COLORS[theme], theme === 'light');
 }
 
 export function setThemePreference(value) {

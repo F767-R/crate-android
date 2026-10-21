@@ -61,6 +61,29 @@ public class MediaBridgePlugin extends Plugin {
     @PluginMethod public void configurePlayback(PluginCall call) {
         withCoordinator(call, coordinator -> coordinator.configure(call.getString("scope")));
     }
+    /** Matches the status/navigation bars to the web UI theme. */
+    @PluginMethod public void setSystemBars(PluginCall call) {
+        final int color;
+        try { color = android.graphics.Color.parseColor(String.valueOf(call.getString("color"))); }
+        catch (IllegalArgumentException invalid) { call.reject("Invalid colour.", "invalid_request"); return; }
+        final boolean lightBackground = Boolean.TRUE.equals(call.getBoolean("lightBackground"));
+        if (getActivity() == null) { call.resolve(); return; }
+        getActivity().runOnUiThread(() -> {
+            try {
+                android.view.Window window = getActivity().getWindow();
+                window.setStatusBarColor(color);
+                window.setNavigationBarColor(color);
+                androidx.core.view.WindowInsetsControllerCompat controller =
+                    androidx.core.view.WindowCompat.getInsetsController(window, window.getDecorView());
+                // "Appearance light" means dark icons, which a light background needs.
+                controller.setAppearanceLightStatusBars(lightBackground);
+                controller.setAppearanceLightNavigationBars(lightBackground);
+                call.resolve();
+            } catch (Exception ignored) {
+                call.reject("Could not update the system bars.", "native_unavailable");
+            }
+        });
+    }
     @PluginMethod public void openNativeLibrary(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             try {

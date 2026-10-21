@@ -17,6 +17,13 @@ export async function openNativeLibrary() {
   return bridge.openNativeLibrary();
 }
 
+// Best effort: older installed builds lack the method, and the web UI works without it.
+export async function nativeSetSystemBars(color, lightBackground) {
+  if (!nativeBridge) initNativeBridge();
+  if (typeof nativeBridge?.setSystemBars !== 'function') return;
+  try { await nativeBridge.setSystemBars({ color, lightBackground }); } catch (_) {}
+}
+
 export async function nativePlayStream(payload) {
   if (!nativeBridge) initNativeBridge();
   if (nativeBridge && nativeBridge.playStream) {
