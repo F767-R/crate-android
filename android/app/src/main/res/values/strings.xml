@@ -4,4 +4,5 @@
     <string name="title_activity_main">C.R.A.T.E.</string>
     <string name="package_name">com.yourname.crate</string>
     <string name="custom_url_scheme">com.yourname.crate</string>
+    <string name="widget_description">Now playing with previous, play/pause and next controls</string>
 </resources>

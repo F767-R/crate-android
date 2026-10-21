@@ -497,12 +497,49 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
             }
         });
 
+        // Keeps the home-screen widget in step with what the session is playing.
+        player.addListener(new Player.Listener() {
+            @Override public void onMediaMetadataChanged(MediaMetadata metadata) { publishWidget(); }
+            @Override public void onMediaItemTransition(MediaItem item, int reason) { publishWidget(); }
+            @Override public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) { publishWidget(); }
+            @Override public void onPlaybackStateChanged(int playbackState) { publishWidget(); }
+        });
+
         downloadExecutor = cacheExecutor();
         artworkExecutor = cacheExecutor();
         instance = this;
         List<Runnable> waiting = new ArrayList<>(readyCalls);
         readyCalls.clear();
         for (Runnable task : waiting) task.run();
+    }
+
+    /** Main thread only (player listener callbacks). */
+    private void publishWidget() {
+        if (destroyed || player == null) return;
+        MediaMetadata metadata = player.getMediaMetadata();
+        int state = player.getPlaybackState();
+        boolean playing = player.getPlayWhenReady() && (state == Player.STATE_READY || state == Player.STATE_BUFFERING);
+        NowPlayingWidget.publish(this,
+            metadata.title == null ? null : metadata.title.toString(),
+            metadata.artist == null ? null : metadata.artist.toString(),
+            metadata.artworkUri == null ? null : metadata.artworkUri.toString(),
+            playing);
+    }
+
+    /** Runs a widget button press against the media session player, like a lockscreen control. */
+    void widgetCommand(String action) {
+        mainHandler.post(() -> {
+            if (destroyed || mediaSession == null) return;
+            Player target = mediaSession.getPlayer();
+            switch (action) {
+                case NowPlayingWidget.ACTION_TOGGLE:
+                    if (target.getPlayWhenReady()) target.pause(); else target.play();
+                    break;
+                case NowPlayingWidget.ACTION_NEXT: target.seekToNext(); break;
+                case NowPlayingWidget.ACTION_PREVIOUS: target.seekToPrevious(); break;
+                default: break;
+            }
+        });
     }
 
     private static ExecutorService cacheExecutor() {
@@ -595,6 +632,7 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
         }
         cacheStore.audio.retainPin(null);
         cacheStore.artwork.retainPin(null);
+        NowPlayingWidget.markStopped(this);
         instance = null;
         super.onDestroy();
     }
