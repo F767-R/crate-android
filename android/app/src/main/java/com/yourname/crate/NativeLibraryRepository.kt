@@ -95,14 +95,24 @@ internal class NativeLibraryRepository(
             if (offset >= 10000) throw IllegalStateException("This preview supports up to 10,000 items per list. Use the current interface for larger libraries.")
         }
     }
+    private fun musicLibraryId(encodedUser: String): String {
+        val views = JSONObject(request("/Users/$encodedUser/Views")).getJSONArray("Items")
+        return (0 until views.length()).map { views.getJSONObject(it) }.firstOrNull { it.optString("CollectionType") == "music" }
+            ?.getString("Id") ?: throw IllegalStateException("No music library was found.")
+    }
     suspend fun albums(): List<NativeAlbum> = withContext(Dispatchers.IO) {
         val uid = encode(user())
-        val views = JSONObject(request("/Users/$uid/Views")).getJSONArray("Items")
-        val library = (0 until views.length()).map { views.getJSONObject(it) }.firstOrNull { it.optString("CollectionType") == "music" }
-            ?: throw IllegalStateException("No music library was found.")
-        val items = items("/Users/$uid/Items", mapOf("ParentId" to library.getString("Id"), "IncludeItemTypes" to "MusicAlbum",
+        val items = items("/Users/$uid/Items", mapOf("ParentId" to musicLibraryId(uid), "IncludeItemTypes" to "MusicAlbum",
             "Recursive" to "true", "SortBy" to "SortName", "SortOrder" to "Ascending", "Fields" to "ProductionYear,AlbumArtist"))
         (0 until items.length()).map { NativeLibraryCodec.album(items.getJSONObject(it)) }
+    }
+    /** Newest albums first; a single small page, used for Android Auto's "For you" suggestions. */
+    suspend fun recentAlbums(limit: Int = 12): List<NativeAlbum> = withContext(Dispatchers.IO) {
+        val uid = encode(user())
+        val page = JSONObject(request("/Users/$uid/Items", mapOf("ParentId" to musicLibraryId(uid), "IncludeItemTypes" to "MusicAlbum",
+            "Recursive" to "true", "SortBy" to "DateCreated", "SortOrder" to "Descending", "Limit" to "$limit",
+            "Fields" to "ProductionYear,AlbumArtist"))).getJSONArray("Items")
+        (0 until page.length()).map { NativeLibraryCodec.album(page.getJSONObject(it)) }
     }
     suspend fun tracks(album: NativeAlbum): List<NativeTrack> = withContext(Dispatchers.IO) {
         NativeLibraryCodec.tracks(items("/Users/${encode(user())}/Items", mapOf("ParentId" to album.id,

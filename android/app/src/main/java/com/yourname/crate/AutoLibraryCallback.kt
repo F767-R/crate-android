@@ -21,7 +21,7 @@ import java.util.function.Consumer
 /**
  * Browse tree and "play this" handling for Android Auto and other media browsers.
  *
- * Root (all albums, as a grid like the app) -> album -> tracks.
+ * Root -> "Albums" tab (every album, as a grid like the app) -> album -> tracks.
  * Playback is not handed to the session player: [onPlay] receives the same payload the
  * native library screen uses, so the queue stays owned by the native coordinator.
  */
@@ -51,6 +51,8 @@ class AutoLibraryCallback(
         params: MediaLibraryService.LibraryParams?,
     ): ListenableFuture<LibraryResult<MediaItem>> {
         if (!trusted(browser)) return immediate(LibraryResult.ofError(LibraryResult.RESULT_ERROR_PERMISSION_DENIED))
+        // Android Auto's "For you" card asks for a separate suggested root.
+        if (params?.isSuggested == true) return immediate(LibraryResult.ofItem(folder(SUGGESTED_ID, "For you"), libraryParams(GRID, LIST)))
         return immediate(LibraryResult.ofItem(folder(ROOT_ID, "C.R.A.T.E."), libraryParams(GRID, LIST)))
     }
 
@@ -61,6 +63,8 @@ class AutoLibraryCallback(
         return launchResult {
             val item = when {
                 mediaId == ROOT_ID -> folder(ROOT_ID, "C.R.A.T.E.")
+                mediaId == SUGGESTED_ID -> folder(SUGGESTED_ID, "For you")
+                mediaId == ALBUMS_ID -> folder(ALBUMS_ID, "Albums")
                 mediaId.startsWith(ALBUM_PREFIX) -> loadAlbums().firstOrNull { it.id == mediaId.removePrefix(ALBUM_PREFIX) }?.let(::albumFolder)
                 mediaId.startsWith(TRACK_PREFIX) -> trackFromId(mediaId)
                 else -> null
@@ -76,7 +80,10 @@ class AutoLibraryCallback(
         if (!trusted(browser)) return immediate(LibraryResult.ofError(LibraryResult.RESULT_ERROR_PERMISSION_DENIED))
         return launchResult {
             val all: List<MediaItem> = when {
-                parentId == ROOT_ID -> loadAlbums().map(::albumFolder)
+                // Auto shows the root's children as tabs, so the root holds one tab and every album sits under it.
+                parentId == ROOT_ID -> listOf(folder(ALBUMS_ID, "Albums"))
+                parentId == ALBUMS_ID -> loadAlbums().map(::albumFolder)
+                parentId == SUGGESTED_ID -> repository.recentAlbums().map(::albumPlayable)
                 parentId.startsWith(ALBUM_PREFIX) -> {
                     val album = loadAlbums().firstOrNull { it.id == parentId.removePrefix(ALBUM_PREFIX) }
                     if (album == null) emptyList() else tracksFor(album).map { trackItem(it) }
@@ -85,8 +92,8 @@ class AutoLibraryCallback(
             }
             val from = (page.coerceAtLeast(0) * pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
             val to = (from + pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
-            // Albums sit directly under the root as a grid, like the app; tracks read best as a list.
-            val hints = if (parentId == ROOT_ID) libraryParams(GRID, LIST) else libraryParams(LIST, LIST)
+            // Albums are a grid like the app; tracks read best as a list.
+            val hints = if (parentId == ROOT_ID || parentId == ALBUMS_ID) libraryParams(GRID, LIST) else libraryParams(LIST, LIST)
             LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), hints)
         }
     }
@@ -189,6 +196,12 @@ class AutoLibraryCallback(
             .setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
             .setExtras(hints(LIST, LIST)).setArtworkUri(artwork(album.id, album.imageTag)).build()).build()
 
+    /** Tapping a suggestion plays the album, so it is playable rather than browsable. */
+    private fun albumPlayable(album: NativeAlbum): MediaItem = MediaItem.Builder().setMediaId("$ALBUM_PREFIX${album.id}")
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(album.title).setArtist(album.artist).setSubtitle(album.artist)
+            .setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_ALBUM)
+            .setArtworkUri(artwork(album.id, album.imageTag)).build()).build()
+
     private fun trackItem(track: NativeTrack): MediaItem = MediaItem.Builder().setMediaId("$TRACK_PREFIX${track.albumId}:${track.id}")
         .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).setAlbumTitle(track.albumTitle)
             .setSubtitle(track.artist).setDurationMs(track.durationMs).setTrackNumber(track.number)
@@ -213,6 +226,8 @@ class AutoLibraryCallback(
         const val LIST = 1
         const val GRID = 2
         const val ROOT_ID = "root"
+        const val SUGGESTED_ID = "suggested"
+        const val ALBUMS_ID = "albums"
         const val ALBUM_PREFIX = "album:"
         const val TRACK_PREFIX = "track:"
         const val ART_SIZE = 400

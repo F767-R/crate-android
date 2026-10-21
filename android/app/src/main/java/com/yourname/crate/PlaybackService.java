@@ -410,6 +410,14 @@ public class PlaybackService extends MediaLibraryService implements NativePlayba
             @Override
             public void seekToPreviousMediaItem() { seekToPrevious(); }
 
+            // Controllers (Android Auto's now-playing widget) cannot open this app's file:// paths,
+            // so the session advertises artwork through AutoArtworkProvider instead.
+            @Override public MediaMetadata getMediaMetadata() { return withShareableArtwork(super.getMediaMetadata()); }
+            @Override public MediaItem getCurrentMediaItem() {
+                MediaItem item = super.getCurrentMediaItem();
+                return item == null ? null : item.buildUpon().setMediaMetadata(withShareableArtwork(item.mediaMetadata)).build();
+            }
+
             // The native coordinator owns the queue. Browsers such as Android Auto start playback
             // through AutoLibraryCallback.onSetMediaItems, so playlist edits that reach the
             // wrapped ExoPlayer from a controller must never change what it is playing.
@@ -531,6 +539,17 @@ public class PlaybackService extends MediaLibraryService implements NativePlayba
         List<Runnable> waiting = new ArrayList<>(readyCalls);
         readyCalls.clear();
         for (Runnable task : waiting) task.run();
+    }
+
+    /** Rewrites a cached-artwork file:// URI into the provider's content:// form; anything else is unchanged. */
+    private MediaMetadata withShareableArtwork(MediaMetadata metadata) {
+        Uri art = metadata.artworkUri;
+        if (art == null || !"file".equals(art.getScheme())) return metadata;
+        String name = art.getLastPathSegment();
+        if (name == null || !name.matches("[0-9a-f]{32}\\.img")) return metadata;
+        Uri shared = new Uri.Builder().scheme("content")
+            .authority(AutoArtworkProvider.authority(getPackageName())).appendPath("art").appendPath(name).build();
+        return metadata.buildUpon().setArtworkUri(shared).build();
     }
 
     /** Main thread only (player listener callbacks). */

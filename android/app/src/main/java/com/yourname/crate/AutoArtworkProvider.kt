@@ -13,7 +13,8 @@ import java.net.URL
  * Serves album artwork to Android Auto. Auto fetches browse thumbnails itself and cannot load an
  * authenticated http URL, so artwork is cached locally and handed over as a content:// file.
  *
- * Uri shape: content://<package>.autoart/album/<albumId>?s=<size>&t=<imageTag>
+ * Uri shapes: content://<package>.autoart/album/<albumId>?s=<size>&t=<imageTag>
+ *             content://<package>.autoart/art/<md5>.img   (artwork PlaybackService already cached)
  * Ids and tags are validated before use, only reads are supported, and the cache is size-bounded.
  */
 class AutoArtworkProvider : ContentProvider() {
@@ -25,6 +26,13 @@ class AutoArtworkProvider : ContentProvider() {
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
         if (mode != "r") throw SecurityException("Read only.")
+        // Now-playing artwork already cached by PlaybackService: content://<auth>/art/<md5>.img
+        if (uri.pathSegments.size == 2 && uri.pathSegments[0] == "art") {
+            val name = uri.pathSegments[1].takeIf { CACHED_NAME.matches(it) } ?: throw java.io.FileNotFoundException()
+            val cached = File(File(context!!.filesDir, "art_cache"), name)
+            if (!cached.isFile) throw java.io.FileNotFoundException()
+            return ParcelFileDescriptor.open(cached, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
         val albumId = uri.pathSegments.takeIf { it.size == 2 && it[0] == "album" }?.get(1)
             ?.takeIf { SAFE_ID.matches(it) } ?: throw java.io.FileNotFoundException()
         val size = (uri.getQueryParameter("s")?.toIntOrNull() ?: DEFAULT_SIZE).coerceIn(64, 800)
@@ -87,10 +95,12 @@ class AutoArtworkProvider : ContentProvider() {
 
     companion object {
         private val SAFE_ID = Regex("^[A-Za-z0-9_-]{1,64}$")
+        private val CACHED_NAME = Regex("^[0-9a-f]{32}\\.img$")
         private const val DEFAULT_SIZE = 400
         private const val MAX_IMAGE_BYTES = 3 * 1024 * 1024
         private const val MAX_CACHE_BYTES = 60L * 1024 * 1024
 
+        @JvmStatic
         fun authority(packageName: String) = "$packageName.autoart"
     }
 }
