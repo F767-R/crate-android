@@ -27,8 +27,8 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.ForwardingTimeline;
 import androidx.media3.session.DefaultMediaNotificationProvider;
+import androidx.media3.session.MediaLibraryService;
 import androidx.media3.session.MediaSession;
-import androidx.media3.session.MediaSessionService;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -75,7 +75,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * onStartCommand NOTE below for why no placeholder notification is posted
  * here).
  */
-public class PlaybackService extends MediaSessionService implements NativePlaybackCoordinator.Backend {
+public class PlaybackService extends MediaLibraryService implements NativePlaybackCoordinator.Backend {
 
     private static final String CHANNEL_ID = "crate_playback_channel";
     private static final int MEDIA_NOTIFICATION_ID = 1000;
@@ -84,7 +84,8 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
     private static final List<Runnable> readyCalls = new ArrayList<>();
 
     private ExoPlayer player;
-    private MediaSession mediaSession;
+    private MediaLibrarySession mediaSession;
+    private AutoLibraryCallback libraryCallback;
     private Player.Listener pendingStartEnforcer;
     private NativePlaybackCoordinator playbackCoordinator;
     private NativeSessionReporter sessionReporter;
@@ -408,6 +409,27 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
 
             @Override
             public void seekToPreviousMediaItem() { seekToPrevious(); }
+
+            // The native coordinator owns the queue. Browsers such as Android Auto start playback
+            // through AutoLibraryCallback.onSetMediaItems, so playlist edits that reach the
+            // wrapped ExoPlayer from a controller must never change what it is playing.
+            @Override public void setMediaItems(List<MediaItem> mediaItems) {}
+            @Override public void setMediaItems(List<MediaItem> mediaItems, boolean resetPosition) {}
+            @Override public void setMediaItems(List<MediaItem> mediaItems, int startIndex, long startPositionMs) {}
+            @Override public void setMediaItem(MediaItem mediaItem) {}
+            @Override public void setMediaItem(MediaItem mediaItem, boolean resetPosition) {}
+            @Override public void setMediaItem(MediaItem mediaItem, long startPositionMs) {}
+            @Override public void addMediaItem(MediaItem mediaItem) {}
+            @Override public void addMediaItem(int index, MediaItem mediaItem) {}
+            @Override public void addMediaItems(List<MediaItem> mediaItems) {}
+            @Override public void addMediaItems(int index, List<MediaItem> mediaItems) {}
+            @Override public void clearMediaItems() {}
+            @Override public void removeMediaItem(int index) {}
+            @Override public void removeMediaItems(int fromIndex, int toIndex) {}
+            @Override public void moveMediaItem(int currentIndex, int newIndex) {}
+            @Override public void moveMediaItems(int fromIndex, int toIndex, int newIndex) {}
+            @Override public void replaceMediaItem(int index, MediaItem mediaItem) {}
+            @Override public void replaceMediaItems(int fromIndex, int toIndex, List<MediaItem> mediaItems) {}
         };
 
         // Session activity: the PendingIntent the OS fires when the user
@@ -427,17 +449,15 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
             this, /* requestCode= */ 0, launch,
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        mediaSession = new MediaSession.Builder(this, sessionPlayer)
+        libraryCallback = new AutoLibraryCallback(getPackageName(), payload -> mainHandler.post(() -> {
+            try {
+                if (!destroyed && playbackCoordinator != null) playbackCoordinator.playSelection(payload);
+            } catch (Exception ignored) {
+                android.util.Log.w("CratePlayback", "Browse playback request could not be applied");
+            }
+        }));
+        mediaSession = new MediaLibrarySession.Builder(this, sessionPlayer, libraryCallback)
             .setSessionActivity(sessionActivity)
-            .setCallback(new MediaSession.Callback() {
-                @Override
-                public MediaSession.ConnectionResult onConnect(
-                    MediaSession session,
-                    MediaSession.ControllerInfo controller
-                ) {
-                    return new MediaSession.ConnectionResult.AcceptedResultBuilder(session).build();
-                }
-            })
             .build();
 
         // REQUIRED: sessions created directly with MediaSession.Builder are
@@ -594,7 +614,7 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
     }
 
     @Override
-    public MediaSession onGetSession(MediaSession.ControllerInfo controllerInfo) {
+    public MediaLibrarySession onGetSession(MediaSession.ControllerInfo controllerInfo) {
         return mediaSession;
     }
 
@@ -621,6 +641,10 @@ public class PlaybackService extends MediaSessionService implements NativePlayba
         if (artworkExecutor != null) {
             artworkExecutor.shutdownNow();
             artworkExecutor = null;
+        }
+        if (libraryCallback != null) {
+            libraryCallback.release();
+            libraryCallback = null;
         }
         if (mediaSession != null) {
             mediaSession.release();

@@ -111,6 +111,9 @@ internal class NativeLibraryRepository(
     }
     fun artwork(album: NativeAlbum, size: Int) = url("/Items/${encode(album.id)}/Images/Primary", mapOf("maxWidth" to "$size", "quality" to "90", "tag" to (album.imageTag ?: "")))
     fun imageToken() = apiKey
+    /** Album artwork URL that an out-of-process client (Android Auto) can fetch without extra headers. */
+    fun artworkUrl(albumId: String, size: Int, imageTag: String? = null): String = url("/Items/${encode(albumId)}/Images/Primary",
+        mapOf("maxWidth" to "$size", "quality" to "90", "ApiKey" to apiKey) + (imageTag?.let { mapOf("tag" to it) } ?: emptyMap()))
     private fun stream(id: String, high: Boolean): String = url("/Audio/${encode(id)}/universal", mapOf(
         "UserId" to (userId ?: ""), "DeviceId" to deviceId, "PlaySessionId" to UUID.randomUUID().toString(),
         "Container" to if (high) "flac" else "opus,webm,ogg", "AudioCodec" to if (high) "flac" else "opus",

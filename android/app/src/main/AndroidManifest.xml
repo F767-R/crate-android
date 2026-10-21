@@ -10,6 +10,10 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:name=".MainActivity"
@@ -28,10 +32,18 @@
         <activity android:name=".NativeLibraryActivity"
             android:exported="false" android:theme="@style/AppTheme.NoActionBar" />
 
+        <!-- Exported so Android Auto and other media browsers can bind. Browsing the catalogue is
+             limited to known packages inside AutoLibraryCallback. -->
         <service
             android:name=".PlaybackService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".NowPlayingWidget"
