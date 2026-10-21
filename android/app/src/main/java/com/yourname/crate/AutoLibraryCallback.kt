@@ -21,7 +21,7 @@ import java.util.function.Consumer
 /**
  * Browse tree and "play this" handling for Android Auto and other media browsers.
  *
- * Root -> Albums -> (A-Z buckets when the library is large) -> album -> tracks.
+ * Root (all albums, as a grid like the app) -> album -> tracks.
  * Playback is not handed to the session player: [onPlay] receives the same payload the
  * native library screen uses, so the queue stays owned by the native coordinator.
  */
@@ -61,7 +61,6 @@ class AutoLibraryCallback(
         return launchResult {
             val item = when {
                 mediaId == ROOT_ID -> folder(ROOT_ID, "C.R.A.T.E.")
-                mediaId == ALBUMS_ID -> folder(ALBUMS_ID, "Albums")
                 mediaId.startsWith(ALBUM_PREFIX) -> loadAlbums().firstOrNull { it.id == mediaId.removePrefix(ALBUM_PREFIX) }?.let(::albumFolder)
                 mediaId.startsWith(TRACK_PREFIX) -> trackFromId(mediaId)
                 else -> null
@@ -77,16 +76,7 @@ class AutoLibraryCallback(
         if (!trusted(browser)) return immediate(LibraryResult.ofError(LibraryResult.RESULT_ERROR_PERMISSION_DENIED))
         return launchResult {
             val all: List<MediaItem> = when {
-                parentId == ROOT_ID -> listOf(folder(ALBUMS_ID, "Albums"))
-                parentId == ALBUMS_ID -> {
-                    val list = loadAlbums()
-                    if (list.size <= BUCKET_THRESHOLD) list.map(::albumFolder)
-                    else list.map(::bucket).distinct().sorted().map { folder("$LETTER_PREFIX$it", it) }
-                }
-                parentId.startsWith(LETTER_PREFIX) -> {
-                    val letter = parentId.removePrefix(LETTER_PREFIX)
-                    loadAlbums().filter { bucket(it) == letter }.map(::albumFolder)
-                }
+                parentId == ROOT_ID -> loadAlbums().map(::albumFolder)
                 parentId.startsWith(ALBUM_PREFIX) -> {
                     val album = loadAlbums().firstOrNull { it.id == parentId.removePrefix(ALBUM_PREFIX) }
                     if (album == null) emptyList() else tracksFor(album).map { trackItem(it) }
@@ -95,13 +85,8 @@ class AutoLibraryCallback(
             }
             val from = (page.coerceAtLeast(0) * pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
             val to = (from + pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
-            // Albums read like the app's grid; letters and tracks read best as lists.
-            val hints = when {
-                parentId == ALBUMS_ID -> if (loadAlbums().size <= BUCKET_THRESHOLD) libraryParams(GRID, LIST) else libraryParams(LIST, LIST)
-                parentId.startsWith(LETTER_PREFIX) -> libraryParams(GRID, LIST)
-                parentId.startsWith(ALBUM_PREFIX) -> libraryParams(LIST, LIST)
-                else -> params
-            }
+            // Albums sit directly under the root as a grid, like the app; tracks read best as a list.
+            val hints = if (parentId == ROOT_ID) libraryParams(GRID, LIST) else libraryParams(LIST, LIST)
             LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), hints)
         }
     }
@@ -180,11 +165,6 @@ class AutoLibraryCallback(
         return if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) parts[0] to parts[1] else null
     }
 
-    private fun bucket(album: NativeAlbum): String {
-        val first = album.title.trimStart().firstOrNull()?.uppercaseChar()
-        return if (first != null && first in 'A'..'Z') first.toString() else "#"
-    }
-
     // ---- Items ----
 
     private fun folder(id: String, title: String): MediaItem = MediaItem.Builder().setMediaId(id)
@@ -233,11 +213,8 @@ class AutoLibraryCallback(
         const val LIST = 1
         const val GRID = 2
         const val ROOT_ID = "root"
-        const val ALBUMS_ID = "albums"
-        const val LETTER_PREFIX = "letter:"
         const val ALBUM_PREFIX = "album:"
         const val TRACK_PREFIX = "track:"
-        const val BUCKET_THRESHOLD = 100
         const val ART_SIZE = 400
         const val MAX_CACHED_ALBUMS = 24
         const val ALBUM_TTL_MS = 5 * 60 * 1000L
