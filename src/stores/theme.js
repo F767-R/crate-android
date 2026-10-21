@@ -1,4 +1,5 @@
-import { signal } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
+import { currentViewState } from './state.js';
 import { nativeSetSystemBars } from '../utils/nativeBridge.js';
 
 export const THEME_OPTIONS = [
@@ -31,12 +32,23 @@ export function resolveTheme(preference = themePreference.value) {
   return preference === 'system' ? (systemPrefersLight() ? 'light' : 'dark') : preference;
 }
 
+// Immersive lyrics always render on the dark palette, so the bars follow it.
+export function systemBarsFor(theme, lyricsActive) {
+  const effective = lyricsActive ? 'dark' : theme;
+  return { color: SYSTEM_BAR_COLORS[effective] || SYSTEM_BAR_COLORS.dark, lightBackground: effective === 'light' };
+}
+
+function applySystemBars() {
+  const { color, lightBackground } = systemBarsFor(resolveTheme(), currentViewState.value.type === 'lyrics');
+  nativeSetSystemBars(color, lightBackground);
+}
+
 function applyTheme() {
   if (typeof document === 'undefined') return;
   const theme = resolveTheme();
   document.documentElement.dataset.theme = theme;
   document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme === 'light' ? 'light' : 'dark');
-  nativeSetSystemBars(SYSTEM_BAR_COLORS[theme], theme === 'light');
+  applySystemBars();
 }
 
 export function setThemePreference(value) {
@@ -49,6 +61,7 @@ export function setThemePreference(value) {
 // Applies the saved theme and follows OS changes while "System" is selected.
 export function initTheme() {
   applyTheme();
+  effect(applySystemBars);
   try {
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
       if (themePreference.value === 'system') applyTheme();

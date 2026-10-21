@@ -9,19 +9,23 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 };
 
-async function apiRequest(endpoint, options = {}) {
+async function apiRequest(endpoint, { timeoutMs, ...options } = {}) {
   const url = new URL(`${config.SERVER}${endpoint}`);
   url.searchParams.set('ApiKey', config.API_KEY);
   return fetchWithTimeout(url, {
     ...options,
     headers: { ...API_HEADERS, ...options.headers },
   }, {
+    ...(timeoutMs ? { timeoutMs } : {}),
     consume: response => {
       if (!response.ok) throw httpError(response.status);
       return response.json();
     },
   });
 }
+
+// The whole-library track list is one large response, so it gets more time than a normal call.
+const LIBRARY_TRACKS_TIMEOUT_MS = 60000;
 
 export async function getUserId(options = {}) {
   const data = await apiRequest('/Users', options);
@@ -66,7 +70,7 @@ export async function getAllTracks(userId, libraryId, options = {}) {
     SortOrder: 'Ascending',
     Fields: 'RunTimeTicks,Artists,ArtistItems,AlbumId,Album,ParentIndexNumber,IndexNumber',
   });
-  return apiRequest(`/Users/${userId}/Items?${params}`, options);
+  return apiRequest(`/Users/${userId}/Items?${params}`, { ...options, timeoutMs: LIBRARY_TRACKS_TIMEOUT_MS });
 }
 
 let _playSessionCounter = 0;

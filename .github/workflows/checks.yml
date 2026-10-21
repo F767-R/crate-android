@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   javascript:
     runs-on: ubuntu-latest
@@ -26,4 +30,12 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
+      # Proves the suite needs no private configuration on a fresh checkout.
+      - run: npm run test:clean
+      # Build with throwaway values so a broken bundle or stylesheet fails the push.
+      # The values are not real credentials and the output is never uploaded.
+      - name: Build web bundle
+        run: |
+          sed 's/replace-with-[a-z0-9-]*/ci-placeholder/g' secrets.example.txt > secrets.txt
+          npm run build
       # No private configuration, APK builds, or artifact uploads in this job.
